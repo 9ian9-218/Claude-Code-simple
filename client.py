@@ -53,11 +53,14 @@ SUBAGENT_SYSTEM = (
     "Do not delegate further."
 )
 SUBAGENT_SYSTEM = SUBAGENT_SYSTEM + SKILL_CATALOG
+
+def _ensure_system(messages, content: str) -> None:
+    if messages and messages[0].get("role") == "system":
+        return
+    messages.insert(0, {"role": "system", "content": content})
+
 def send_messages(messages,max_tokens=10000,isSubagent=False):
-    if isSubagent:
-        messages.insert(0, {"role": "system", "content": SUBAGENT_SYSTEM})
-    else:
-        messages.insert(0, {"role": "system", "content": SYSTEM})
+    _ensure_system(messages, SUBAGENT_SYSTEM if isSubagent else SYSTEM)
     stream = client.chat.completions.create(
         model=os.getenv("OPENAI_MODEL"),
         messages=messages,

@@ -9,13 +9,22 @@ import json
 from types import SimpleNamespace
 from client import send_messages
 from hook import trigger_hooks
-from tool import execute_tool_call  
+from tool import execute_tool_call
+import compact
 
 
 def agent_loop(messages: list, *, max_turn: int = 100,max_tokens: int = 10000,isSubagent=False) -> str | None:
     """内层循环：反复调用 LLM，直到不再请求工具或达到 max_turn。"""
     for turn in range(max_turn):
         #print(f"第{turn}步")
+        messages[:] = compact.tool_result_budget(messages)    # L3: persist large results first
+        messages[:] = compact.snip_compact(messages)          # L1: trim middle
+        messages[:] = compact.micro_compact(messages)         # L2: old result placeholders
+
+        # s08 change: tokens still over threshold → LLM summary (1 API call)
+        if compact.estimate_messages_tokens(messages) > compact.CONTEXT_LIMIT:
+            print("[auto compact]")
+            messages[:] = compact.compact_history(messages)
         message = send_messages(messages,max_tokens=max_tokens,isSubagent=isSubagent)
         if message.tool_calls:
             messages.append(message.model_dump(exclude_none=True))
