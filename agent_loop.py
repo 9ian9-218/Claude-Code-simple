@@ -11,10 +11,38 @@ from client import send_messages
 from hook import trigger_hooks
 from tool import execute_tool_call
 import compact
+from memory import (
+    load_memories,
+    find_memory_injection_index,
+    snapshot_messages,
+    extract_memories,
+    consolidate_memories,
+)
 
 
-def agent_loop(messages: list, *, max_turn: int = 100,max_tokens: int = 10000,isSubagent=False) -> str | None:
+def _build_request_messages(messages: list, memories_content: str) -> list:
+    if not memories_content:
+        return messages
+    memory_turn = find_memory_injection_index(messages)
+    if memory_turn is None:
+        return messages
+    request_messages = messages.copy()
+    original = messages[memory_turn]["content"]
+    if original.startswith("<relevant_memories>"):
+        return messages
+    request_messages[memory_turn] = {
+        **messages[memory_turn],
+        "content": memories_content + "\n\n" + original,
+    }
+    return request_messages
+
+
+def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 10000, isSubagent=False) -> str | None:
     """内层循环：反复调用 LLM，直到不再请求工具或达到 max_turn。"""
+    memories_content = "" if isSubagent else load_memories(messages)
+    pre_compress = snapshot_messages(messages)
+    reactive_retries = 0
+
     for turn in range(max_turn):
         #print(f"第{turn}步")
         messages[:] = compact.tool_result_budget(messages)    # L3: persist large results first
@@ -24,7 +52,19 @@ def agent_loop(messages: list, *, max_turn: int = 100,max_tokens: int = 10000,is
         if compact.estimate_messages_tokens(messages) > compact.CONTEXT_LIMIT:
             print("[auto compact]")
             messages[:] = compact.compact_history(messages)
-        message = send_messages(messages,max_tokens=max_tokens,isSubagent=isSubagent)
+        try:
+            request_messages = _build_request_messages(messages, memories_content)
+            message = send_messages(request_messages, max_tokens=max_tokens, isSubagent=isSubagent)
+            reactive_retries = 0
+        except Exception as e:
+            if (
+                "prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()
+            ) and reactive_retries < compact.MAX_REACTIVE_RETRIES:
+                print("[reactive compact]")
+                messages[:] = compact.reactive_compact(messages)
+                reactive_retries += 1
+                continue
+            raise
         if message.tool_calls:
             messages.append(message.model_dump(exclude_none=True))
             for tool_call in message.tool_calls:
@@ -61,5 +101,10 @@ def agent_loop(messages: list, *, max_turn: int = 100,max_tokens: int = 10000,is
         if force:   #目前不会触发
             messages.append({"role": "user", "content": force})
             continue
+
+        if not isSubagent:
+            extract_memories(pre_compress)
+            consolidate_memories()
         return
+
 

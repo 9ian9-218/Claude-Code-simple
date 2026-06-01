@@ -24,6 +24,8 @@ CONTEXT_LIMIT = 480_000 # 触发 L4 全量压缩的阈值（窗口 80%）
 AUTO_COMPACT_MAX_INPUT_TOKENS_EST = 240_000   # L4: 送总结的最大输入 token，（约窗口 40%）
 MAX_OUTPUT_TOKENS_FOR_SUMMARY = 12_000      #L4: 总结输出 token 上限
 TRANSCRIPT_DIR = WORKDIR / ".transcripts"
+#reactivte config
+MAX_REACTIVE_RETRIES=2
 
 # ----- 参考：1M 窗口对应值 -----
 # MODEL_MAX_CONTEXT_TOKENS = 1_000_000

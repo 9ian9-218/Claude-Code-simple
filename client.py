@@ -8,7 +8,9 @@ import os
 import sys
 from config import WORKDIR
 from skill_load import SKILL_CATALOG
+from memory import MEMMORY_SYSTEM, build_memory_system
 from dotenv import load_dotenv
+
 load_dotenv()
 
 client = OpenAI(
@@ -42,11 +44,13 @@ class AssistantMessage:
         return d
 
 SYSTEM = (
-        f"You are a coding agent at {WORKDIR}. "
-        "Before starting any multi-step task, use todo_write to plan your steps and update status as you go. "
-        "For complex sub-problems, use the task tool to spawn a subagent."
-    )
+    f"You are a coding agent at {WORKDIR}. "
+    "Before starting any multi-step task, use todo_write to plan your steps and update status as you go. "
+    "For complex sub-problems, use the task tool to spawn a subagent."
+)
 SYSTEM = SYSTEM + SKILL_CATALOG
+SYSTEM = SYSTEM + MEMMORY_SYSTEM
+
 SUBAGENT_SYSTEM = (
     f"You are a coding agent at {WORKDIR}. "
     "Complete the task you were given, then return a concise summary. "
@@ -54,13 +58,24 @@ SUBAGENT_SYSTEM = (
 )
 SUBAGENT_SYSTEM = SUBAGENT_SYSTEM + SKILL_CATALOG
 
+_SYSTEM_CORE = SYSTEM[: len(SYSTEM) - len(MEMMORY_SYSTEM)]
+
+
+def _main_system_prompt() -> str:
+    """与 SYSTEM + MEMMORY_SYSTEM 同形式，发送前用 build_memory_system() 刷新索引。"""
+    return _SYSTEM_CORE + build_memory_system()
+
+
 def _ensure_system(messages, content: str) -> None:
     if messages and messages[0].get("role") == "system":
+        messages[0]["content"] = content
         return
     messages.insert(0, {"role": "system", "content": content})
 
-def send_messages(messages,max_tokens=10000,isSubagent=False):
-    _ensure_system(messages, SUBAGENT_SYSTEM if isSubagent else SYSTEM)
+
+def send_messages(messages, max_tokens=10000, isSubagent=False):
+    system_prompt = SUBAGENT_SYSTEM if isSubagent else _main_system_prompt()
+    _ensure_system(messages, system_prompt)
     stream = client.chat.completions.create(
         model=os.getenv("OPENAI_MODEL"),
         messages=messages,

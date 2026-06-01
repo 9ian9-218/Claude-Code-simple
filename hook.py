@@ -28,6 +28,7 @@ def context_inject_hook(query: str) -> None:
 
 def validate_args(args: dict[str, Any], schema: dict[str, Any]) -> str | None:
     """schema + 路径安全校验。"""
+    """schema + 路径安全校验。"""
     required = schema.get("required", [])
     properties = schema.get("properties", {})
 
@@ -89,6 +90,11 @@ def summary_hook(messages: list) -> None:
     tool_count = sum(1 for m in messages if m.get("role") == "tool")
     print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
 
+# from memory import extract_memories,consolidate_memories
+# def update_memory_hook(messages:list) -> None:
+#     extract_memories(messages)
+#     consolidate_memories()
+# register_hook("stop",update_memory_hook)
 
 # ── Hook 注册表 ───────────────────────────────────────────────────────────
 
