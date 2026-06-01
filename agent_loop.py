@@ -21,7 +21,6 @@ def agent_loop(messages: list, *, max_turn: int = 100,max_tokens: int = 10000,is
         messages[:] = compact.snip_compact(messages)          # L1: trim middle
         messages[:] = compact.micro_compact(messages)         # L2: old result placeholders
 
-        # s08 change: tokens still over threshold → LLM summary (1 API call)
         if compact.estimate_messages_tokens(messages) > compact.CONTEXT_LIMIT:
             print("[auto compact]")
             messages[:] = compact.compact_history(messages)

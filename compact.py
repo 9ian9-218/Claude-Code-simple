@@ -5,33 +5,37 @@ import re
 import os
 from dotenv import load_dotenv
 from client import client
-
 load_dotenv()
 
-# ===== 1M context (DeepSeek) =====
-MODEL_MAX_CONTEXT_TOKENS = 1_000_000
-# 预留给模型输出、tools schema、token 估算误差
-AUTOCOMPACT_BUFFER_TOKENS = 50_000
-# 超过此值触发 L4 全量 LLM 总结（约窗口 80%）
-CONTEXT_LIMIT = 800_000
-
+MODEL_MAX_CONTEXT_TOKENS = 600_000  # 模型理论最大上下文长度
+AUTOCOMPACT_BUFFER_TOKENS = 30_000  # 预留给模型输出、tools schema、token 估算误差（约窗口 5%）
 # ===== L3: tool result budget =====
-PERSIST_THRESHOLD_TOKENS = 8_000       # 单条 tool 结果超过此值才持久化到磁盘
-BUDGET_MAX_TOKENS = 200_000            # 同轮 tool 结果总 token 预算
-PREVIEW_TOKENS = 500                   # 持久化后 preview 的 token 上限
+BUDGET_MAX_TOKENS = 120_000             # L3: 同一轮 tool result 总 token 预算，约窗口 20%）
+PERSIST_THRESHOLD_TOKENS = 6_000        # L3: 单条 tool result 落盘阈值
+PREVIEW_TOKENS = 500                    # L3: 落盘后预览 token 数
 TOOL_RESULTS_DIR = WORKDIR / ".task_outputs" / "tool-results"
-
 # ===== L1: snip =====
-MAX_NUM_MESSAGES = 200                 # 消息条数上限（1M 下可保留更多轮次）
-
+MAX_NUM_MESSAGES = 240                  # L1: 消息条数上限
 # ===== L2: micro compact =====
-MICRO_COMPACT_MAX_MESSAGE_TOKENS = 12_000
-MICRO_COMPACT_KEEP_RECENT_TOOL_RESULTS = 15
-
+MICRO_COMPACT_MAX_MESSAGE_TOKENS = 8_000    #L2: 旧 tool result 被替换的 token 阈值
+MICRO_COMPACT_KEEP_RECENT_TOOL_RESULTS = 10 #L2: 保留最近 tool result 数
 # ===== L4: auto / reactive compact =====
-AUTO_COMPACT_MAX_INPUT_TOKENS_EST = 350_000
-MAX_OUTPUT_TOKENS_FOR_SUMMARY = 16_000
+CONTEXT_LIMIT = 480_000 # 触发 L4 全量压缩的阈值（窗口 80%）
+AUTO_COMPACT_MAX_INPUT_TOKENS_EST = 240_000   # L4: 送总结的最大输入 token，（约窗口 40%）
+MAX_OUTPUT_TOKENS_FOR_SUMMARY = 12_000      #L4: 总结输出 token 上限
 TRANSCRIPT_DIR = WORKDIR / ".transcripts"
+
+# ----- 参考：1M 窗口对应值 -----
+# MODEL_MAX_CONTEXT_TOKENS = 1_000_000
+# AUTOCOMPACT_BUFFER_TOKENS = 50_000
+# CONTEXT_LIMIT = 800_000
+# PERSIST_THRESHOLD_TOKENS = 8_000
+# BUDGET_MAX_TOKENS = 200_000
+# MAX_NUM_MESSAGES = 300
+# MICRO_COMPACT_MAX_MESSAGE_TOKENS = 12_000
+# MICRO_COMPACT_KEEP_RECENT_TOOL_RESULTS = 15
+# AUTO_COMPACT_MAX_INPUT_TOKENS_EST = 350_000
+# MAX_OUTPUT_TOKENS_FOR_SUMMARY = 16_000
 
 
 def estimate_tokens(text: str) -> int:
@@ -54,18 +58,107 @@ def estimate_messages_tokens(messages) -> int:
     return sum(estimate_message_tokens(m) for m in messages)
 
 
+def _split_rounds(body: list) -> list[list]:
+    """Split body into rounds; assistant+tool_calls includes all following tool messages."""
+    rounds: list[list] = []
+    i, n = 0, len(body)
+    while i < n:
+        start = i
+        msg = body[i]
+        i += 1
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            while i < n and body[i].get("role") == "tool":
+                i += 1
+        rounds.append(body[start:i])
+    return rounds
+
+
+def _flatten_rounds(rounds: list[list]) -> list:
+    out: list = []
+    for r in rounds:
+        out.extend(r)
+    return out
+
+
+def _validate_tool_pairing(messages) -> None:
+    """Raise if assistant tool_calls are not fully answered by following tool messages."""
+    i, n = 0, len(messages)
+    while i < n:
+        msg = messages[i]
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            expected = {tc["id"] for tc in msg["tool_calls"]}
+            i += 1
+            seen: set[str] = set()
+            while i < n and messages[i].get("role") == "tool":
+                seen.add(messages[i].get("tool_call_id"))
+                i += 1
+            if expected != seen:
+                raise ValueError(
+                    f"tool_call pairing broken: expected {expected}, got {seen}"
+                )
+        else:
+            i += 1
+
 
 # L1: snipCompact — trim middle messages (实际的第二步)
 def snip_compact(messages, max_messages=MAX_NUM_MESSAGES):
     if len(messages) <= max_messages:
         return messages
-    keep_head, keep_tail = 3, max_messages - 3
-    snipped = len(messages) - keep_head - keep_tail
-    return (
-        messages[:keep_head]
-        + [{"role": "user", "content": f"[snipped {snipped} messages]"}]
-        + messages[-keep_tail:]
-    )
+
+    prefix, body = [], messages
+    if messages and messages[0].get("role") == "system":
+        prefix, body = [messages[0]], messages[1:]
+
+    rounds = _split_rounds(body)
+    if len(rounds) <= 1:
+        return messages
+
+    # 从 head / tail 各保留若干完整 round，中间用占位符替换
+    head_idx = 0
+    head_len = len(prefix)
+    for r in rounds:
+        next_len = head_len + len(r)
+        if next_len + 1 + 1 > max_messages:  # 留 1 占位 + 至少 1 条 tail
+            break
+        head_len = next_len
+        head_idx += 1
+
+    if head_idx == 0:
+        head_idx = 1
+        head_len = len(prefix) + len(rounds[0])
+
+    tail_budget = max_messages - head_len - 1
+    tail_rounds: list[list] = []
+    tail_len = 0
+    for r in reversed(rounds[head_idx:]):
+        if tail_len + len(r) > tail_budget and tail_rounds:
+            break
+        tail_rounds.insert(0, r)
+        tail_len += len(r)
+
+    if not tail_rounds:
+        tail_rounds = [rounds[-1]]
+        tail_len = len(tail_rounds[0])
+
+    tail_idx = len(rounds) - len(tail_rounds)
+    if tail_idx <= head_idx:
+        return messages
+
+    while tail_idx > head_idx + 1:
+        snipped = sum(len(r) for r in rounds[head_idx:tail_idx])
+        result = list(prefix)
+        result.extend(_flatten_rounds(rounds[:head_idx]))
+        result.append({"role": "user", "content": f"[snipped {snipped} messages]"})
+        result.extend(_flatten_rounds(rounds[tail_idx:]))
+        try:
+            _validate_tool_pairing(result)
+        except ValueError:
+            return messages
+        if len(result) <= max_messages:
+            return result
+        tail_idx -= 1
+
+    return messages
 
 
 # L2: microCompact — old result placeholders (实际的第三步)
