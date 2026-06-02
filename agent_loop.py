@@ -11,13 +11,7 @@ from client import send_messages
 from hook import trigger_hooks
 from tool import execute_tool_call
 import compact
-from memory import (
-    load_memories,
-    find_memory_injection_index,
-    snapshot_messages,
-    extract_memories,
-    consolidate_memories,
-)
+from memory import load_memories, find_memory_injection_index, snapshot_messages
 
 
 def _build_request_messages(messages: list, memories_content: str) -> list:
@@ -97,14 +91,11 @@ def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 10000, 
                 return message.content
         if isSubagent:
             return "Subagent stopped after 30 turns without final answer."
-        force = trigger_hooks("Stop", messages)
-        if force:   #目前不会触发
+        # 自然结束（无 tool_calls）→ Stop hook：提取 memory + Dream（非 autoCompact 后）
+        force = trigger_hooks("Stop", messages, pre_compress, isSubagent)
+        if force:
             messages.append({"role": "user", "content": force})
             continue
-
-        if not isSubagent:
-            extract_memories(pre_compress)
-            consolidate_memories()
         return
 
 

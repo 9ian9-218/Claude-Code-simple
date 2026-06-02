@@ -1,6 +1,6 @@
 """Hook 注册表 — 扩展逻辑挂载在事件上，不侵入主循环。"""
 
-
+import threading
 from typing import Any, Callable
 
 from check_permissions import permission_hook
@@ -27,7 +27,6 @@ def context_inject_hook(query: str) -> None:
 # ── PreToolUse / PostToolUse ──────────────────────────────────────────────
 
 def validate_args(args: dict[str, Any], schema: dict[str, Any]) -> str | None:
-    """schema + 路径安全校验。"""
     """schema + 路径安全校验。"""
     required = schema.get("required", [])
     properties = schema.get("properties", {})
@@ -82,19 +81,31 @@ def large_output_hook(block, output) -> None:
 
 # ── Stop ──────────────────────────────────────────────────────────────────
 
-def summary_hook(messages: list) -> None:
-    """
-    Stop 阶段的 hook，用于会话结束时统计和输出本次会话用过多少次工具调用（即 tool role 的消息数量）。
-    主要作用是：辅助统计和调试，便于观察 Agent 在一次对话中实际调用工具的次数。
-    """
+def summary_hook(messages: list, *args: Any, **kwargs: Any) -> None:
+    """统计本轮 tool 调用次数。"""
     tool_count = sum(1 for m in messages if m.get("role") == "tool")
     print(f"\033[90m[HOOK] Stop: session used {tool_count} tool calls\033[0m")
 
-# from memory import extract_memories,consolidate_memories
-# def update_memory_hook(messages:list) -> None:
-#     extract_memories(messages)
-#     consolidate_memories()
-# register_hook("stop",update_memory_hook)
+
+def memory_stop_hook(
+    messages: list,
+    pre_compress: list | None = None,
+    is_subagent: bool = False,
+    **kwargs: Any,
+) -> None:
+    """
+    Stop hook：在模型自然结束（无 tool_calls）
+    使用 compact 前快照提取；fire-and-forget，不阻塞主循环。
+    不在 autoCompact 之后调用。
+    """
+    if is_subagent or pre_compress is None:
+        return
+    def _run() -> None:
+        from memory import extract_memories, consolidate_memories
+        extract_memories(pre_compress)
+        consolidate_memories()
+    threading.Thread(target=_run, daemon=True).start()
+
 
 # ── Hook 注册表 ───────────────────────────────────────────────────────────
 
@@ -102,5 +113,5 @@ HOOKS: dict[str, list[Callable[..., Any]]] = {
     "UserPromptSubmit": [context_inject_hook],
     "PreToolUse": [validate_hook, permission_hook, log_hook],
     "PostToolUse": [large_output_hook],
-    "Stop": [summary_hook],
+    "Stop": [summary_hook, memory_stop_hook],
 }
