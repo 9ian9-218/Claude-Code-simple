@@ -180,8 +180,13 @@ def load_memories(messages: list) -> str:
 
 
 #————————————————————————————————————————————————————————————————————————————————————————————————————————————————
-
-
+"""
+CC 的 Dream 有四层门控：
+**时间门控**：距上次合并 ≥ 24 小时
+**扫描节流**：避免频繁扫描文件系统
+**会话门控**：自上次合并以来修改了 ≥ 5 个会话 transcript
+**锁门控**：没有其他进程正在合并（.consolidate-lock 文件）
+"""
 def find_memory_injection_index(messages: list) -> int | None:
     """Latest injectable user message (after compact/snip)."""
     for i in range(len(messages) - 1, -1, -1):
