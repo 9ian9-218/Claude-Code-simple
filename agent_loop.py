@@ -22,7 +22,8 @@ def _build_request_messages(messages: list, memories_content: str) -> list:
         return messages
     request_messages = messages.copy()
     original = messages[memory_turn]["content"]
-    if original.startswith("<relevant_memories>"):
+    from prompt import RELEVANT_MEMORIES_OPEN
+    if original.startswith(RELEVANT_MEMORIES_OPEN):
         return messages
     request_messages[memory_turn] = {
         **messages[memory_turn],

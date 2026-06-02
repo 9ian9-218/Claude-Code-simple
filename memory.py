@@ -122,14 +122,8 @@ def select_relevant_memories(messages: list, max_items: int = 5) -> list[str]:
     catalog_lines = [f"{i}: {f['name']} — {f['description']}" for i, f in enumerate(files)]
     catalog = "\n".join(catalog_lines)
 
-    prompt = (
-        "Given the recent conversation and the memory catalog below, "
-        "select the indices of memories that are clearly relevant. "
-        "Return ONLY a JSON array of integers, e.g. [0, 3]. "
-        "If none are relevant, return [].\n\n"
-        f"Recent conversation:\n{recent}\n\n"
-        f"Memory catalog:\n{catalog}"
-    )
+    from prompt import format_select_memories
+    prompt = format_select_memories(recent, catalog)
 
     try:
         response = _get_client().chat.completions.create(
@@ -170,12 +164,13 @@ def load_memories(messages: list) -> str:
     if not selected_files:
         return ""
 
-    parts = ["<relevant_memories>"]
+    from prompt import RELEVANT_MEMORIES_OPEN, RELEVANT_MEMORIES_CLOSE
+    parts = [RELEVANT_MEMORIES_OPEN]
     for filename in selected_files:
         content = read_memory_file(filename)
         if content:
             parts.append(content)
-    parts.append("</relevant_memories>")
+    parts.append(RELEVANT_MEMORIES_CLOSE)
     return "\n\n".join(parts)
 
 
@@ -234,18 +229,8 @@ def extract_memories(messages: list):
     existing = list_memory_files()
     existing_desc = "\n".join(f"- {m['name']}: {m['description']}" for m in existing) if existing else "(none)"
 
-    prompt = (
-        "Extract user preferences, constraints, or project facts from this dialogue.\n"
-        "Return a JSON array. Each item: {name, type, description, body}.\n"
-        "- name: short kebab-case identifier (e.g. 'user-preference-tabs')\n"
-        "- type: one of 'user' (user preference), 'feedback' (guidance), "
-        "'project' (project fact), 'reference' (external pointer)\n"
-        "- description: one-line summary for index lookup\n"
-        "- body: full detail in markdown\n"
-        "If nothing new or already covered by existing memories, return [].\n\n"
-        f"Existing memories:\n{existing_desc}\n\n"
-        f"Dialogue:\n{dialogue[:4000]}"
-    )
+    from prompt import format_extract_memories
+    prompt = format_extract_memories(existing_desc, dialogue[:4000])
 
     try:
         response = _get_client().chat.completions.create(
@@ -287,15 +272,8 @@ def consolidate_memories():
         for f in files
     )
 
-    prompt = (
-        "Consolidate the following memory files. Rules:\n"
-        "1. Merge duplicates into one\n"
-        "2. Remove outdated/contradicted memories\n"
-        f"3. Keep the total under {CONSOLIDATE_THRESHOLD} memories\n"
-        "4. Preserve important user preferences above all\n"
-        "Return a JSON array. Each item: {name, type, description, body}.\n\n"
-        f"{catalog[:16000]}"
-    )
+    from prompt import format_consolidate_memories
+    prompt = format_consolidate_memories(catalog[:16000], CONSOLIDATE_THRESHOLD)
 
     try:
         response = _get_client().chat.completions.create(
@@ -327,22 +305,7 @@ def consolidate_memories():
         pass
 
 
-# Build SYSTEM with memory index
 def build_memory_system() -> str:
-    """Memory 段（拼在 SYSTEM + SKILL 之后，不含 agent 主介绍）。"""
-    index = read_memory_index()
-    if not index:
-        return (
-            "\n\nNo memories stored yet.\n"
-            "Relevant memories may be injected into the user message when applicable.\n"
-            "When the user says 'remember' or expresses a clear preference, extract it as a memory."
-        )
-    return (
-        f"\n\nMemories available:\n{index}\n"
-        "Relevant memories are injected into the latest user message when applicable.\n"
-        "Respect user preferences from memory.\n"
-        "When the user says 'remember' or expresses a clear preference, extract it as a memory."
-    )
-
-
-MEMMORY_SYSTEM = build_memory_system()
+    """Memory 段（供兼容；请优先使用 prompt.build_memory_section）。"""
+    from prompt import build_memory_section
+    return build_memory_section(read_memory_index())

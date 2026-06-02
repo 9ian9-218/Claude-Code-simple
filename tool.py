@@ -385,11 +385,8 @@ TODO_WRITE_TOOL = build_tool(
 )
 
 #subagent_task
-SUB_SYSTEM = (
-    f"You are a coding agent at {WORKDIR}. "
-    "Complete the task you were given, then return a concise summary. "
-    "Do not delegate further."
-)
+from prompt import SUBAGENT_IDENTITY
+
 def _spawn_subagent(args: dict[str, Any]) -> str:
     """子 Agent：独立 messages[]，仅返回最终文本摘要。"""
     from agent_loop import agent_loop
@@ -397,7 +394,7 @@ def _spawn_subagent(args: dict[str, Any]) -> str:
     description = args["description"]
     print(f"\n\033[35m[Subagent spawned]\033[0m")
     messages = [
-        {"role": "system", "content": SUB_SYSTEM},
+        {"role": "system", "content": SUBAGENT_IDENTITY},
         {"role": "user", "content": description},
     ]
     result = agent_loop(messages, max_turn=30, max_tokens=6000, isSubagent=True)

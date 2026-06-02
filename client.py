@@ -6,9 +6,9 @@ from openai.types.chat.chat_completion_message_tool_call import (
 from tool import get_all_tools
 import os
 import sys
-from config import WORKDIR
 from skill_load import SKILL_CATALOG
-from memory import MEMMORY_SYSTEM, build_memory_system
+from memory import read_memory_index
+from prompt import build_agent_core, build_memory_section, build_subagent_system
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -43,27 +43,16 @@ class AssistantMessage:
             d = {k: v for k, v in d.items() if v is not None}
         return d
 
-SYSTEM = (
-    f"You are a coding agent at {WORKDIR}. "
-    "Before starting any multi-step task, use todo_write to plan your steps and update status as you go. "
-    "For complex sub-problems, use the task tool to spawn a subagent."
-)
-SYSTEM = SYSTEM + SKILL_CATALOG
-SYSTEM = SYSTEM + MEMMORY_SYSTEM
 
-SUBAGENT_SYSTEM = (
-    f"You are a coding agent at {WORKDIR}. "
-    "Complete the task you were given, then return a concise summary. "
-    "Do not delegate further."
-)
-SUBAGENT_SYSTEM = SUBAGENT_SYSTEM + SKILL_CATALOG
-
-_SYSTEM_CORE = SYSTEM[: len(SYSTEM) - len(MEMMORY_SYSTEM)]
+# 与原先一致：SYSTEM = identity + SKILL + memory（import 时 memory 为快照）
+_AGENT_CORE = build_agent_core(SKILL_CATALOG)
+SYSTEM = _AGENT_CORE + build_memory_section(read_memory_index())
+SUBAGENT_SYSTEM = build_subagent_system(SKILL_CATALOG)
 
 
 def _main_system_prompt() -> str:
-    """与 SYSTEM + MEMMORY_SYSTEM 同形式，发送前用 build_memory_system() 刷新索引。"""
-    return _SYSTEM_CORE + build_memory_system()
+    """发送前刷新 MEMORY.md 索引段。"""
+    return _AGENT_CORE + build_memory_section(read_memory_index())
 
 
 def _ensure_system(messages, content: str) -> None:
@@ -84,7 +73,6 @@ def send_messages(messages, max_tokens=10000, isSubagent=False):
         stream=True,
         max_tokens=max_tokens,
     )
-    # finish_reason (stop_reason) may lag behind tool_use blocks during streaming.
     needs_follow_up = False
     finish_reason = None
     content_parts = []

@@ -35,10 +35,11 @@ _scan_skills()  # runs once at startup
 
 def list_skills() -> str:
     return "\n".join(f"- **{s['name']}**: {s['description']}" for s in SKILL_REGISTRY.values())
+
+
 def build_system() -> str:
-    catalog = list_skills()
-    return (
-        f"Skills available:\n{catalog}\n"
-        "Use load_skill to get full details when needed."
-    )
+    from prompt import build_skill_section
+    return build_skill_section(list_skills())
+
+
 SKILL_CATALOG = build_system()

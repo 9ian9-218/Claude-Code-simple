@@ -150,7 +150,8 @@ def snip_compact(messages, max_messages=MAX_NUM_MESSAGES):
         snipped = sum(len(r) for r in rounds[head_idx:tail_idx])
         result = list(prefix)
         result.extend(_flatten_rounds(rounds[:head_idx]))
-        result.append({"role": "user", "content": f"[snipped {snipped} messages]"})
+        from prompt import format_snipped_user_message
+        result.append({"role": "user", "content": format_snipped_user_message(snipped)})
         result.extend(_flatten_rounds(rounds[tail_idx:]))
         try:
             _validate_tool_pairing(result)
@@ -268,12 +269,8 @@ def summarize_history(messages):
     else:
         messages_to_summarize = messages
     conversation = json.dumps(messages_to_summarize, default=str)
-    prompt = (
-        "Summarize this coding-agent conversation so work can continue.\n"
-        "Preserve: 1. current goal, 2. key findings/decisions, 3. files read/changed, "
-        "4. remaining work, 5. user constraints.\nBe compact but concrete.\n\n"
-        + conversation
-    )
+    from prompt import format_compact_summary
+    prompt = format_compact_summary(conversation)
     response = client.chat.completions.create(
         model=os.getenv("OPENAI_MODEL"),
         messages=[{"role": "user", "content": prompt}],
@@ -286,11 +283,13 @@ def compact_history(messages):
     transcript_path = write_transcript(messages)
     print(f"[transcript saved: {transcript_path}]")
     summary = summarize_history(messages)
-    return [{"role": "user", "content": f"[Compacted]\n\n{summary}"}]
+    from prompt import format_compacted_user_message
+    return [{"role": "user", "content": format_compacted_user_message(summary)}]
 
 
 # Emergency: reactiveCompact — on API error
 def reactive_compact(messages):
     write_transcript(messages)
     summary = summarize_history(messages)
-    return [{"role": "user", "content": f"[Reactive compact]\n\n{summary}"}, *messages[-5:]]
+    from prompt import format_reactive_compacted_user_message
+    return [{"role": "user", "content": format_reactive_compacted_user_message(summary)}, *messages[-5:]]
