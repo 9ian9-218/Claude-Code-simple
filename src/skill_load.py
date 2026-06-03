@@ -1,5 +1,8 @@
 from pathlib import Path
-SKILLS_DIR = Path(__file__).parent / "skills"
+
+from config import PROJECT_ROOT
+
+SKILLS_DIR = PROJECT_ROOT / "skills"
 
 SKILL_REGISTRY: dict[str, dict] = {}
 

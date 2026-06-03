@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 error_recovery.py — LLM 调用错误恢复
 
@@ -29,8 +31,6 @@ reason/transition   | 教学版对应  | Claude Code 行为
 | `blocking_limit` | 未展开 | 阻塞限制 |
 | `max_turns` | 未展开 | 达到最大轮次 |
 """
-
-from __future__ import annotations
 
 import os
 import random

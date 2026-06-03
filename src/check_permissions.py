@@ -5,11 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-WORKDIR = Path.cwd()
+from config import WORKDIR
 
 # Gate 1: 硬拒绝黑名单（run_bash 专用，直接返回错误）
 # Gate 2: 规则匹配（按工具名 + 条件，命中则进入 Gate 3）

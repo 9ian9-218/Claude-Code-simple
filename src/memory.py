@@ -3,9 +3,6 @@ import time
 import json
 import re
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 MEMORY_TYPES = ["user", "feedback", "project", "reference"]
 MEMORY_DIR = WORKDIR / ".memory"

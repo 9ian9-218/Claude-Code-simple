@@ -3,9 +3,7 @@ import time
 import json
 import re
 import os
-from dotenv import load_dotenv
 from client import client
-load_dotenv()
 
 MODEL_MAX_CONTEXT_TOKENS = 600_000  # 模型理论最大上下文长度
 AUTOCOMPACT_BUFFER_TOKENS = 30_000  # 预留给模型输出、tools schema、token 估算误差（约窗口 5%）

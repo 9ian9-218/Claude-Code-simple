@@ -6,10 +6,9 @@ from openai.types.chat.chat_completion_message_tool_call import (
 from tool import get_all_tools
 import os
 import sys
-from prompt import get_system_prompt, update_context
-from dotenv import load_dotenv
+import config 
 
-load_dotenv()
+from prompt import get_system_prompt, update_context
 
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
