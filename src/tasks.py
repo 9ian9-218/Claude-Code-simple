@@ -37,45 +37,129 @@ def parse_task_num(task_id: str) -> int | None:
         return None
 
 
-def allocate_task_id() -> str:
-    """
-    顺序 ID + highwatermark（对齐 CC tasks.ts）。
-    - 新 ID = max(文件中的 highwatermark, 现存 task 文件最大序号) + 1
-    - 写入 highwatermark 后再创建任务，即使任务 JSON 被删也不会重用旧 ID
-    """
-    # 1. 读取 highwatermark
+def _read_highwatermark() -> int:
+    """读取曾分配过的最高任务序号（文件不存在则为 0）。"""
     if not HIGHWATERMARK_FILE.exists():
-        highwatermark = 0
-    else:
-        text = HIGHWATERMARK_FILE.read_text().strip()
-        try:
-            highwatermark = int(text) if text else 0
-        except ValueError:
-            highwatermark = 0
-    # 2. 遍历所有 task_*.json，找最大 task id（即 task_数字），复用 parse_task_num
+        return 0
+    text = HIGHWATERMARK_FILE.read_text().strip()
+    if not text:
+        return 0
+    try:
+        return int(text)
+    except ValueError:
+        return 0
+
+
+def _write_highwatermark(value: int) -> None:
+    HIGHWATERMARK_FILE.write_text(f"{value}\n")
+
+
+def _max_id_from_task_files() -> int:
+    """扫描 task_*.json 的最大序号（highwatermark 丢失时用于恢复）。"""
     max_id = 0
     for path in TASKS_DIR.glob("task_*.json"):
         num = parse_task_num(path.stem)
         if num is not None:
             max_id = max(max_id, num)
-    # 3. 新 id = max(highwatermark, max_id) + 1
-    current = max(highwatermark, max_id)
-    next_id = current + 1
-    # 4. 写入 highwatermark
-    HIGHWATERMARK_FILE.write_text(f"{next_id}\n")
-    # 5. 返回新 task id
+    return max_id
+
+
+def _next_task_num() -> int:
+    """下一个 task 序号（不写盘）。"""
+    return max(_read_highwatermark(), _max_id_from_task_files()) + 1
+
+
+def allocate_task_id() -> str:
+    """
+    顺序 ID + highwatermark（对齐 CC tasks.ts）。
+    新 ID = max(highwatermark, 现存文件最大序号) + 1；写入后即使删除 JSON 也不重用。
+    """
+    next_id = _next_task_num()
+    _write_highwatermark(next_id)
     return f"task_{next_id}"
+
+
+# ── 依赖图（blockedBy：task → 依赖，边 u→v 表示 u 须等 v 完成）──
+
+def build_dependency_graph(
+    extra_nodes: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    """
+    构建 blockedBy 有向图 adj[u] = u 依赖的 task id 列表。
+    extra_nodes: 尚未落盘的节点，例如 {"task_5": ["task_1", "task_2"]}。
+    """
+    graph: dict[str, list[str]] = {t.id: list(t.blockedBy) for t in list_tasks()}
+    if extra_nodes:
+        graph.update({k: list(v) for k, v in extra_nodes.items()})
+    return graph
+
+
+def task_graph_has_cycle(graph: dict[str, list[str]] | None = None) -> bool:
+    """检测依赖图是否存在环（有环则可能出现永远无法 claim 的死锁）。"""
+    graph = graph if graph is not None else build_dependency_graph()
+
+    visited: set[str] = set()
+    stack: set[str] = set()
+
+    def dfs(node: str) -> bool:
+        if node in stack:
+            return True
+        if node in visited:
+            return False
+        visited.add(node)
+        stack.add(node)
+        for dep in graph.get(node, []):
+            if dep not in graph:
+                continue
+            if dfs(dep):
+                return True
+        stack.remove(node)
+        return False
+
+    for node in graph:
+        if node not in visited and dfs(node):
+            return True
+    return False
+
+
+def validate_create_task_dependencies(task_id: str, blocked_by: list[str]) -> str | None:
+    """
+    校验新建 task 的 blockedBy 是否合法且无环。
+    返回 None 表示通过；否则返回可读错误信息。
+    """
+    if task_id in blocked_by:
+        return f"Task {task_id} cannot depend on itself"
+
+    for dep in blocked_by:
+        if not _task_path(dep).exists():
+            return f"Unknown dependency: {dep}"
+
+    graph = build_dependency_graph({task_id: blocked_by})
+    if task_graph_has_cycle(graph):
+        return (
+            "blockedBy would create a cyclic dependency; "
+            "fix the dependency chain so tasks can complete in order"
+        )
+    return None
 
 
 def create_task(subject: str, description: str = "",
                 blockedBy: list[str] | None = None) -> Task:
+    blocked_by = blockedBy or []
+    next_num = _next_task_num()
+    task_id = f"task_{next_num}"
+    err = validate_create_task_dependencies(task_id, blocked_by)
+    if err:
+        raise ValueError(err)
+
+    _write_highwatermark(next_num)
     task = Task(
-        id=allocate_task_id(),
+        id=task_id,
         subject=subject,
         description=description,
         status="pending",
         owner=None,
-        blockedBy=blockedBy or [],
+        blockedBy=blocked_by,
     )
     save_task(task)
     return task
@@ -148,7 +232,10 @@ def complete_task(task_id: str) -> str:
 
 def run_create_task(subject: str, description: str = "",
                     blockedBy: list[str] | None = None) -> str:
-    task = create_task(subject, description, blockedBy)
+    try:
+        task = create_task(subject, description, blockedBy)
+    except ValueError as e:
+        return f"Error: {e}"
     deps = f" (blockedBy: {', '.join(blockedBy)})" if blockedBy else ""
     print(f"  \033[34m[create] {task.subject}{deps}\033[0m")
     return f"Created {task.id}: {task.subject}{deps}"
