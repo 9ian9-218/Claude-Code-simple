@@ -1,0 +1,11 @@
+{
+  "id": "task_3",
+  "subject": "legacy-up",
+  "description": "",
+  "status": "completed",
+  "owner": "agent",
+  "blockedBy": [],
+  "blocks": [
+    "task_4"
+  ]
+}

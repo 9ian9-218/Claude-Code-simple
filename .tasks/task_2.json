@@ -1,0 +1,11 @@
+{
+  "id": "task_2",
+  "subject": "d",
+  "description": "",
+  "status": "pending",
+  "owner": null,
+  "blockedBy": [
+    "task_1"
+  ],
+  "blocks": []
+}

@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from config import WORKDIR
-
+"""
+CC 任务系统字段：(本项目包括了其中 7 个字段)
+字段	类型	用途
+id	string	递增整数 ID
+subject	string	简短标题
+description	string	自由格式描述
+activeForm	string?	进行时态，in_progress 时在 spinner 显示，不包括
+owner	string?	分配的 agent ID
+status	pending/in_progress/completed	生命周期
+blocks	string[]	此任务阻塞的任务 ID（下游）
+blockedBy	string[]	阻塞此任务的任务 ID（上游）
+metadata	Record?	任意扩展键值对，不包括
+"""
 # ── Task System ──
 
 TASKS_DIR = WORKDIR / ".tasks"
@@ -20,7 +32,8 @@ class Task:
     description: str
     status: str          # pending | in_progress | completed
     owner: str | None    # Agent name (multi-agent scenarios)
-    blockedBy: list[str] # Dependency task IDs
+    blockedBy: list[str] = field(default_factory=list)  # 上游：须等这些 task 完成
+    blocks: list[str] = field(default_factory=list)     # 下游：被本 task 阻塞的 task id
 
 
 def _task_path(task_id: str) -> Path:
@@ -122,6 +135,62 @@ def task_graph_has_cycle(graph: dict[str, list[str]] | None = None) -> bool:
     return False
 
 
+def _task_from_dict(data: dict) -> Task:
+    """从 JSON 反序列化 。"""
+    return Task(
+        id=data["id"],
+        subject=data["subject"],
+        description=data.get("description", ""),
+        status=data["status"],
+        owner=data.get("owner"),
+        blockedBy=list(data.get("blockedBy", [])),
+        blocks=list(data.get("blocks", [])),
+    )
+
+
+_blocks_index_synced = False
+
+
+def _ensure_blocks_index() -> None:
+    """
+    根据全图 blockedBy 重建 blocks 。
+    每个进程首次访问任务列表时执行一次。
+    """
+    global _blocks_index_synced
+    if _blocks_index_synced:
+        return
+
+    paths = list(TASKS_DIR.glob("task_*.json"))
+    if not paths:
+        _blocks_index_synced = True
+        return
+
+    tasks = [_task_from_dict(json.loads(p.read_text())) for p in paths]
+    blocks_map: dict[str, list[str]] = {t.id: [] for t in tasks}
+
+    for t in tasks:
+        for dep_id in t.blockedBy:
+            if dep_id in blocks_map and t.id not in blocks_map[dep_id]:
+                blocks_map[dep_id].append(t.id)
+
+    for t in tasks:
+        new_blocks = sorted(blocks_map[t.id])
+        if t.blocks != new_blocks:
+            t.blocks = new_blocks
+            save_task(t)
+
+    _blocks_index_synced = True
+
+
+def add_block(downstream_id: str, blocked_by: list[str]) -> None:
+    """下游 blockedBy 指向的上游，在上游 blocks 中登记 downstream_id（O(1) 查表）。"""
+    for upstream_id in blocked_by:
+        upstream = load_task(upstream_id)
+        if downstream_id not in upstream.blocks:
+            upstream.blocks.append(downstream_id)
+            save_task(upstream)
+
+
 def validate_create_task_dependencies(task_id: str, blocked_by: list[str]) -> str | None:
     """
     校验新建 task 的 blockedBy 是否合法且无环。
@@ -160,8 +229,10 @@ def create_task(subject: str, description: str = "",
         status="pending",
         owner=None,
         blockedBy=blocked_by,
+        blocks=[],
     )
     save_task(task)
+    add_block(task_id, blocked_by)
     return task
 
 
@@ -170,11 +241,14 @@ def save_task(task: Task):
 
 
 def load_task(task_id: str) -> Task:
-    return Task(**json.loads(_task_path(task_id).read_text()))
+    """加载单条任务；首次加载前会按需从 blockedBy 同步 blocks 索引。"""
+    _ensure_blocks_index()
+    return _task_from_dict(json.loads(_task_path(task_id).read_text()))
 
 
 def list_tasks() -> list[Task]:
-    tasks = [Task(**json.loads(p.read_text())) for p in TASKS_DIR.glob("task_*.json")]
+    _ensure_blocks_index()
+    tasks = [_task_from_dict(json.loads(p.read_text())) for p in TASKS_DIR.glob("task_*.json")]
     tasks.sort(key=lambda t: parse_task_num(t.id) or 0)
     return tasks
 
@@ -218,8 +292,13 @@ def complete_task(task_id: str) -> str:
         return f"Task {task_id} is {task.status}, cannot complete"
     task.status = "completed"
     save_task(task)
-    unblocked = [t.subject for t in list_tasks()
-                 if t.status == "pending" and t.blockedBy and can_start(t.id)]
+    unblocked: list[str] = []
+    for down_id in task.blocks:
+        if not _task_path(down_id).exists():
+            continue
+        downstream = load_task(down_id)
+        if downstream.status == "pending" and can_start(down_id):
+            unblocked.append(downstream.subject)
     print(f"  \033[32m[complete] {task.subject} ✓\033[0m")
     msg = f"Completed {task.id} ({task.subject})"
     if unblocked:
@@ -252,9 +331,10 @@ def run_list_tasks(status_filter: str = "all") -> str:
         icon = {"pending": "○", "in_progress": "●",
                 "completed": "✓"}.get(t.status, "?")
         deps = f" (blockedBy: {', '.join(t.blockedBy)})" if t.blockedBy else ""
+        blocks = f" (blocks: {', '.join(t.blocks)})" if t.blocks else ""
         owner = f" [{t.owner}]" if t.owner else ""
         lines.append(f"  {icon} {t.id}: {t.subject} "
-                     f"[{t.status}]{owner}{deps}")
+                     f"[{t.status}]{owner}{deps}{blocks}")
     return "\n".join(lines)
 
 

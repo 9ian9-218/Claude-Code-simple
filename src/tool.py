@@ -522,7 +522,8 @@ CREATE_TASK_TOOL = build_tool(
     name="create_task",
     description=(
         "Plan phase: create a persisted task in .tasks/ (use during initial planning "
-        "for large multi-step goals). Set blockedBy for dependencies. "
+        "for large multi-step goals). Set blockedBy for dependencies; "
+        "blocks on upstream tasks is maintained automatically. "
         "Pass empty string / empty array when description or blockedBy are not needed. "
         "Create the full plan before claim_task or implementation tools."
     ),
