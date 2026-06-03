@@ -34,8 +34,33 @@ from config import WORKDIR
 
 AGENT_IDENTITY = (
     f"You are a coding agent at {WORKDIR}. "
-    "Before starting any multi-step task, use todo_write to plan your steps and update status as you go. "
-    "For complex sub-problems, use the task tool to spawn a subagent."
+    "For isolated deep dives, use subagent_task. "
+    "For the current turn's short checklist, use todo_write."
+)
+
+# 大型多步目标：先规划（create_task）再执行（claim → work → complete）
+TASK_PLANNING_SECTION = (
+    f"\n\n## Plan and resolve (persisted tasks in {WORKDIR}/.tasks)\n"
+    "When the user gives a large or multi-step goal (feature, refactor, migration, "
+    "several files, or work that may span many tool rounds), use the persisted task "
+    "system — do NOT jump straight into bash/read/write for the whole goal.\n\n"
+    "**Phase 1 — Plan (before implementation tools):**\n"
+    "1. Break the goal into ordered steps with clear subjects.\n"
+    "2. Call create_task for each step; use blockedBy for dependencies "
+    "(e.g. tests blockedBy API task id).\n"
+    "3. Call list_tasks with status_filter='all' to confirm the plan.\n"
+    "4. Optionally use todo_write for the *current* step's micro-actions only.\n\n"
+    "**Phase 2 — Resolve (one persisted task at a time):**\n"
+    "1. claim_task on the next pending task whose dependencies are satisfied.\n"
+    "2. Do the work with read_file, write_file, run_bash, etc.\n"
+    "3. complete_task when that step is done; check which tasks were unblocked.\n"
+    "4. Repeat until all tasks are completed or the user stops you.\n\n"
+    "Rules:\n"
+    "- Do not claim multiple persisted tasks in parallel.\n"
+    "- Do not complete_task without having claimed it first.\n"
+    "- Add new create_task entries only if the plan truly changes; prefer finishing "
+    "the existing plan first.\n"
+    "- Simple one-shot requests (read one file, run one command) do not need create_task.\n"
 )
 
 SUBAGENT_IDENTITY = (
@@ -105,6 +130,7 @@ def build_subagent_system(skill_catalog: str) -> str:
 # 按主题划分的 prompt 片段；动态段（skill / memory）在 assemble 时从 context 注入
 PROMPT_SECTIONS = {
     "identity": AGENT_IDENTITY,
+    "task_planning": TASK_PLANNING_SECTION,
     "subagent_identity": SUBAGENT_IDENTITY,
     "workspace": f"Working directory: {WORKDIR}",
     "memory_hint": "Relevant memories may be injected into the user message when applicable.",
@@ -114,12 +140,14 @@ PROMPT_SECTIONS = {
 def assemble_system_prompt(context: dict, *, isSubagent: bool = False) -> str:
     """
     根据 context 选择并拼接 system prompt 各段。
-    主 agent: identity + skill_catalog + memory_section
+    主 agent: identity + task_planning + skill_catalog + memory_section
     子 agent: subagent_identity + skill_catalog
     """
     # 身份段：主/子 agent 使用不同模板
     identity = PROMPT_SECTIONS["subagent_identity"] if isSubagent else PROMPT_SECTIONS["identity"]
     parts = [identity]
+    if not isSubagent:
+        parts.append(PROMPT_SECTIONS["task_planning"])
     # skill 段：context 里存的是已格式化的 skill section（即 SKILL_CATALOG）
     skill_catalog = context.get("skill_catalog", "")
     if skill_catalog:
@@ -173,7 +201,7 @@ def get_system_prompt(context: dict, *, isSubagent: bool = False) -> str:
         return _last_prompt
     _last_context_key = key
     _last_prompt = assemble_system_prompt(context, isSubagent=False)
-    loaded = ["identity", "skills"]
+    loaded = ["identity", "task_planning", "skills"]
     if context.get("memories"):
         loaded.append("memory")
     else:

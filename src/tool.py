@@ -394,7 +394,10 @@ _TODO_WRITE_SCHEMA = {
 }
 TODO_WRITE_TOOL = build_tool(
     name="todo_write",
-    description="Create and manage a task list for your current coding session.",
+    description=(
+        "Session checklist for micro-steps within the *current* persisted task only. "
+        "For large multi-step goals, plan first with create_task/list_tasks, not todo_write alone."
+    ),
     parameters=_TODO_WRITE_SCHEMA,
     execute=_exec_todo_write,
     is_read_only=True,
@@ -430,9 +433,12 @@ _TASK_SCHEMA = {
     "required": ["description"],
     "additionalProperties": False,
 }
-TASK_TOOL = build_tool(
-    name="task",
-    description="Launch a subagent to handle a complex subtask. Returns only the final conclusion.",
+SUBAGENT_TASK_TOOL = build_tool(
+    name="subagent_task",
+    description=(
+        "Launch a subagent for an isolated sub-problem. "
+        "Not for the main plan-and-resolve workflow (use create_task/claim_task there)."
+    ),
     parameters=_TASK_SCHEMA,
     execute=_spawn_subagent,
     is_read_only=False,
@@ -459,6 +465,149 @@ LOAD_SKILL_TOOL = build_tool(
     execute=_load_skill,
     is_read_only=True,
 )
+
+# ── Task system（.tasks/ 持久化）────────────────────────────────────
+
+from tasks import (
+    run_claim_task,
+    run_complete_task,
+    run_create_task,
+    run_get_task,
+    run_list_tasks,
+)
+
+def _exec_create_task(args: dict[str, Any]) -> str:
+    blocked = args["blockedBy"]
+    return run_create_task(
+        args["subject"],
+        args["description"],
+        blocked if blocked else None,
+    )
+
+
+def _exec_list_tasks(args: dict[str, Any]) -> str:
+    return run_list_tasks(args["status_filter"])
+
+
+def _exec_get_task(args: dict[str, Any]) -> str:
+    return run_get_task(args["task_id"])
+
+
+def _exec_claim_task(args: dict[str, Any]) -> str:
+    return run_claim_task(args["task_id"])
+
+
+def _exec_complete_task(args: dict[str, Any]) -> str:
+    return run_complete_task(args["task_id"])
+
+
+_CREATE_TASK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "subject": {"type": "string", "description": "Short task title"},
+        "description": {
+            "type": "string",
+            "description": "Detailed description; use empty string if none",
+        },
+        "blockedBy": {
+            "type": "array",
+            "description": "Dependency task IDs; use empty array if none",
+            "items": {"type": "string"},
+        },
+    },
+    "required": ["subject", "description", "blockedBy"],
+    "additionalProperties": False,
+}
+CREATE_TASK_TOOL = build_tool(
+    name="create_task",
+    description=(
+        "Plan phase: create a persisted task in .tasks/ (use during initial planning "
+        "for large multi-step goals). Set blockedBy for dependencies. "
+        "Pass empty string / empty array when description or blockedBy are not needed. "
+        "Create the full plan before claim_task or implementation tools."
+    ),
+    parameters=_CREATE_TASK_SCHEMA,
+    execute=_exec_create_task,
+    is_read_only=False,
+)
+
+_LIST_TASKS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status_filter": {
+            "type": "string",
+            "enum": ["all", "pending", "in_progress", "completed"],
+            "description": "Filter by status, or 'all' for every task",
+        },
+    },
+    "required": ["status_filter"],
+    "additionalProperties": False,
+}
+LIST_TASKS_TOOL = build_tool(
+    name="list_tasks",
+    description=(
+        "Plan phase: list persisted tasks after create_task to verify the plan. "
+        "Use status_filter='all' before starting execution."
+    ),
+    parameters=_LIST_TASKS_SCHEMA,
+    execute=_exec_list_tasks,
+    is_read_only=True,
+)
+
+_GET_TASK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "task_id": {"type": "string", "description": "Task ID, e.g. task_1"},
+    },
+    "required": ["task_id"],
+    "additionalProperties": False,
+}
+GET_TASK_TOOL = build_tool(
+    name="get_task",
+    description="Get full details of a specific task by ID.",
+    parameters=_GET_TASK_SCHEMA,
+    execute=_exec_get_task,
+    is_read_only=True,
+)
+
+_CLAIM_TASK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "task_id": {"type": "string", "description": "Task ID to claim"},
+    },
+    "required": ["task_id"],
+    "additionalProperties": False,
+}
+CLAIM_TASK_TOOL = build_tool(
+    name="claim_task",
+    description=(
+        "Resolve phase: claim ONE pending task (dependencies must be completed) "
+        "before doing implementation work. Sets status to in_progress."
+    ),
+    parameters=_CLAIM_TASK_SCHEMA,
+    execute=_exec_claim_task,
+    is_read_only=False,
+)
+
+_COMPLETE_TASK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "task_id": {"type": "string", "description": "Task ID to complete"},
+    },
+    "required": ["task_id"],
+    "additionalProperties": False,
+}
+COMPLETE_TASK_TOOL = build_tool(
+    name="complete_task",
+    description=(
+        "Resolve phase: mark the claimed in_progress task completed after its work "
+        "is done. Reports unblocked downstream tasks; then claim the next one."
+    ),
+    parameters=_COMPLETE_TASK_SCHEMA,
+    execute=_exec_complete_task,
+    is_read_only=False,
+)
+
 # ── 工具列表 ──────────────────────────────────────────────────────────────
 TOOLS = [
     TAVILY_SEARCH_TOOL,
@@ -468,7 +617,12 @@ TOOLS = [
     EDIT_FILE_TOOL,
     GLOB_TOOL,
     TODO_WRITE_TOOL,
-    TASK_TOOL,
+    CREATE_TASK_TOOL,
+    LIST_TASKS_TOOL,
+    GET_TASK_TOOL,
+    CLAIM_TASK_TOOL,
+    COMPLETE_TASK_TOOL,
+    SUBAGENT_TASK_TOOL,
     LOAD_SKILL_TOOL,
 ]
 
@@ -480,7 +634,14 @@ def _get_tool_map() -> dict[str, Tool]:
 
 # ── 对外 API ──────────────────────────────────────────────────────────────
 
-SUBAGENT_EXCLUDED_TOOLS = frozenset({"todo_write", "task", "tavily_search"})# 子 agent 不可见的工具
+SUBAGENT_EXCLUDED_TOOLS = frozenset({
+    "todo_write",
+    "subagent_task",
+    "tavily_search",
+    "create_task",
+    "claim_task",
+    "complete_task",
+})  # 子 agent 不可见的工具
 def get_all_tools(isSubagent=False) -> list[dict[str, Any]]:
     """
     返回所有工具的 OpenAI schema 列表。
