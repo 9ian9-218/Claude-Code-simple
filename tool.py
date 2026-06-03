@@ -244,12 +244,24 @@ READ_FILE_TOOL = build_tool(
 )
 
 #write_file
+def _maybe_rebuild_memory_index(file_path: Path) -> None:
+    """write_file 写入 .memory/*.md 后刷新 MEMORY.md 索引（MEMORY.md 本身除外）。"""
+    from memory import MEMORY_DIR, _rebuild_index
+
+    if file_path.name == "MEMORY.md" or file_path.suffix != ".md":
+        return
+    if file_path.parent == MEMORY_DIR.resolve():
+        _rebuild_index()
+
+
 def _exec_write_file(args: dict[str, Any]) -> str:
     """将 content 写入指定路径（覆盖已有内容）。"""
     path = args["path"]
     content = args["content"]
     try:
-        safe_path(path).write_text(content)
+        file_path = safe_path(path)
+        file_path.write_text(content)
+        _maybe_rebuild_memory_index(file_path)
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as e:
         return f"Error: {e}"
@@ -310,21 +322,25 @@ def _exec_glob(args: dict[str, Any]) -> str:
     """按 glob 模式匹配 WORKDIR 下的文件，返回换行分隔的路径列表。"""
     pattern = args["pattern"]
     try:
-        return "\n".join(glob_module.glob(pattern, root_dir=WORKDIR))
+        recursive = "**" in pattern
+        return "\n".join(glob_module.glob(pattern, root_dir=WORKDIR, recursive=recursive))
     except Exception as e:
         return f"Error: {e}"
 
 _GLOB_SCHEMA = {
     "type": "object",
     "properties": {
-        "pattern": {"type": "string", "description": "The glob pattern (e.g. '*.py')"},
+        "pattern": {
+            "type": "string",
+            "description": "Glob pattern relative to WORKDIR (e.g. '**/*.py', 'Claude-Code/skills/*'). Match case exactly — Linux is case-sensitive.",
+        },
     },
     "required": ["pattern"],
     "additionalProperties": False,
 }
 GLOB_TOOL = build_tool(
     name="glob",
-    description="Match and list files using a glob pattern.",
+    description="Match and list files using a glob pattern. Paths are relative to WORKDIR; match case exactly (Linux is case-sensitive).",
     parameters=_GLOB_SCHEMA,
     execute=_exec_glob,
     is_read_only=True,

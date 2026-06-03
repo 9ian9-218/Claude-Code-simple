@@ -1,0 +1,1 @@
+- [prefer-concise-answers](prefer-concise-answers.md) — User prefers concise answers over long complex ones.

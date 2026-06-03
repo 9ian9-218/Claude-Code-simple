@@ -20,7 +20,6 @@ def main():
         trigger_hooks("UserPromptSubmit", query)
         messages.append({"role": "user", "content": query})
         agent_loop(messages)
-        trigger_hooks("Stop", messages)
 
 
 if __name__ == "__main__":

@@ -7,11 +7,11 @@ hook 挂载点（与 s04 对齐）：
 
 import json
 from types import SimpleNamespace
-from client import send_messages
 from hook import trigger_hooks
 from tool import execute_tool_call
 import compact
 from memory import load_memories, find_memory_injection_index, snapshot_messages
+from error_recovery import RecoveryState, send_messages_with_recovery
 
 
 def _build_request_messages(messages: list, memories_content: str) -> list:
@@ -32,11 +32,13 @@ def _build_request_messages(messages: list, memories_content: str) -> list:
     return request_messages
 
 
-def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 10000, isSubagent=False) -> str | None:
+
+def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 8000, isSubagent=False) -> str | None:
     """内层循环：反复调用 LLM，直到不再请求工具或达到 max_turn。"""
     memories_content = "" if isSubagent else load_memories(messages)
     pre_compress = snapshot_messages(messages)
-    reactive_retries = 0
+    recovery_state = RecoveryState()
+    effective_max_tokens = max_tokens
 
     for turn in range(max_turn):
         #print(f"第{turn}步")
@@ -47,19 +49,21 @@ def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 10000, 
         if compact.estimate_messages_tokens(messages) > compact.CONTEXT_LIMIT:
             print("[auto compact]")
             messages[:] = compact.compact_history(messages)
-        try:
-            request_messages = _build_request_messages(messages, memories_content)
-            message = send_messages(request_messages, max_tokens=max_tokens, isSubagent=isSubagent)
-            reactive_retries = 0
-        except Exception as e:
-            if (
-                "prompt_too_long" in str(e).lower() or "too many tokens" in str(e).lower()
-            ) and reactive_retries < compact.MAX_REACTIVE_RETRIES:
-                print("[reactive compact]")
-                messages[:] = compact.reactive_compact(messages)
-                reactive_retries += 1
-                continue
-            raise
+        request_messages = _build_request_messages(messages, memories_content)
+        llm_result = send_messages_with_recovery(
+            request_messages=request_messages,
+            messages=messages,
+            state=recovery_state,
+            max_tokens=effective_max_tokens,
+            isSubagent=isSubagent,
+        )
+        if llm_result.action == "retry":
+            if llm_result.max_tokens is not None:
+                effective_max_tokens = llm_result.max_tokens
+            continue
+        if llm_result.action == "abort":
+            return
+        message = llm_result.message
         if message.tool_calls:
             messages.append(message.model_dump(exclude_none=True))
             for tool_call in message.tool_calls:
@@ -92,7 +96,7 @@ def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 10000, 
                 return message.content
         if isSubagent:
             return "Subagent stopped after 30 turns without final answer."
-        # 自然结束（无 tool_calls）→ Stop hook：提取 memory + Dream（非 autoCompact 后）
+        # 自然结束 → Stop hook：提取 memory + Dream（非 autoCompact 后）
         force = trigger_hooks("Stop", messages, pre_compress, isSubagent)
         if force:
             messages.append({"role": "user", "content": force})

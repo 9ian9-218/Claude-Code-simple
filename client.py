@@ -6,9 +6,7 @@ from openai.types.chat.chat_completion_message_tool_call import (
 from tool import get_all_tools
 import os
 import sys
-from skill_load import SKILL_CATALOG
-from memory import read_memory_index
-from prompt import build_agent_core, build_memory_section, build_subagent_system
+from prompt import get_system_prompt, update_context
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -44,15 +42,9 @@ class AssistantMessage:
         return d
 
 
-# 与原先一致：SYSTEM = identity + SKILL + memory（import 时 memory 为快照）
-_AGENT_CORE = build_agent_core(SKILL_CATALOG)
-SYSTEM = _AGENT_CORE + build_memory_section(read_memory_index())
-SUBAGENT_SYSTEM = build_subagent_system(SKILL_CATALOG)
-
-
-def _main_system_prompt() -> str:
-    """发送前刷新 MEMORY.md 索引段。"""
-    return _AGENT_CORE + build_memory_section(read_memory_index())
+_initial_context = update_context({}, [])
+SYSTEM = get_system_prompt(_initial_context)
+SUBAGENT_SYSTEM = get_system_prompt(_initial_context, isSubagent=True)
 
 
 def _ensure_system(messages, content: str) -> None:
@@ -62,11 +54,12 @@ def _ensure_system(messages, content: str) -> None:
     messages.insert(0, {"role": "system", "content": content})
 
 
-def send_messages(messages, max_tokens=10000, isSubagent=False):
-    system_prompt = SUBAGENT_SYSTEM if isSubagent else _main_system_prompt()
+def send_messages(messages, max_tokens=8000, isSubagent=False, model=None):
+    context = update_context({}, messages)
+    system_prompt = get_system_prompt(context, isSubagent=isSubagent)
     _ensure_system(messages, system_prompt)
     stream = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL"),
+        model=model or os.getenv("OPENAI_MODEL"),
         messages=messages,
         tools=get_all_tools(isSubagent),
         tool_choice="auto",
