@@ -63,6 +63,20 @@ TASK_PLANNING_SECTION = (
     "- Simple one-shot requests (read one file, run one command) do not need create_task.\n"
 )
 
+BACKGROUND_TASKS_SECTION = (
+    "\n\n## Background tasks (run_bash)\n"
+    "Slow shell commands may run in a background thread when run_in_background is true "
+    "or when the command looks long-running (install, build, test, etc.).\n"
+    "- Set run_in_background=false to force synchronous execution and get output in the "
+    "tool result immediately.\n"
+    "- While a background task runs, you get a placeholder tool result; the real output "
+    "is delivered later as a user message wrapped in <task_notification> XML.\n"
+    "- On completion: <status>completed</status> plus an Output section — read it and "
+    "continue the task.\n"
+    "- On stall (interactive prompt): a statusless notification with last output — "
+    "kill the task and re-run with non-interactive flags or piped input.\n"
+)
+
 SUBAGENT_IDENTITY = (
     f"You are a coding agent at {WORKDIR}. "
     "Complete the task you were given, then return a concise summary. "
@@ -131,6 +145,7 @@ def build_subagent_system(skill_catalog: str) -> str:
 PROMPT_SECTIONS = {
     "identity": AGENT_IDENTITY,
     "task_planning": TASK_PLANNING_SECTION,
+    "background_tasks": BACKGROUND_TASKS_SECTION,
     "subagent_identity": SUBAGENT_IDENTITY,
     "workspace": f"Working directory: {WORKDIR}",
     "memory_hint": "Relevant memories may be injected into the user message when applicable.",
@@ -148,6 +163,7 @@ def assemble_system_prompt(context: dict, *, isSubagent: bool = False) -> str:
     parts = [identity]
     if not isSubagent:
         parts.append(PROMPT_SECTIONS["task_planning"])
+        parts.append(PROMPT_SECTIONS["background_tasks"])
     # skill 段：context 里存的是已格式化的 skill section（即 SKILL_CATALOG）
     skill_catalog = context.get("skill_catalog", "")
     if skill_catalog:

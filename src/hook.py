@@ -53,6 +53,8 @@ def validate_args(args: dict[str, Any], schema: dict[str, Any]) -> str | None:
             return f"Parameter '{key}' must be a number"
         if expected == "array" and not isinstance(value, list):
             return f"Parameter '{key}' must be a array"
+        if expected == "boolean" and not isinstance(value, bool):
+            return f"Parameter '{key}' must be a boolean"
 
     if "path" in properties and isinstance(args.get("path"), str):
         from tool import _check_path

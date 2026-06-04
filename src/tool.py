@@ -201,8 +201,9 @@ _BASH_SCHEMA = {
     "type": "object",
     "properties": {
         "command": {"type": "string", "description": "The command to run"},
+        "run_in_background": {"type": "boolean", "description": "Whether to run the command in background"},
     },
-    "required": ["command"],
+    "required": ["command", "run_in_background"],
     "additionalProperties": False,
 }
 RUN_BASH_TOOL = build_tool(

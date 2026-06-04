@@ -12,6 +12,8 @@ from tool import execute_tool_call
 import compact
 from memory import load_memories, find_memory_injection_index, snapshot_messages
 from error_recovery import RecoveryState, send_messages_with_recovery
+from background_task import should_run_background, start_background_task
+from messageQueueManager import consume_pending_notifications
 
 
 def _build_request_messages(messages: list, memories_content: str) -> list:
@@ -32,6 +34,12 @@ def _build_request_messages(messages: list, memories_content: str) -> list:
     return request_messages
 
 
+def _inject_pending_notifications(messages: list) -> None:
+    """消费命令队列中的 pending 通知（对齐 query.ts:1566-1593）。"""
+    for notif in consume_pending_notifications():
+        messages.append({"role": "user", "content": notif})
+        print(f"  \033[32m[inject] task_notification\033[0m")
+
 
 def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 8000, isSubagent=False) -> str | None:
     """内层循环：反复调用 LLM，直到不再请求工具或达到 max_turn。"""
@@ -41,7 +49,9 @@ def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 8000, i
     effective_max_tokens = max_tokens
 
     for turn in range(max_turn):
-        #print(f"第{turn}步")
+        if not isSubagent:
+            _inject_pending_notifications(messages)
+
         messages[:] = compact.tool_result_budget(messages)    # L3: persist large results first
         messages[:] = compact.snip_compact(messages)          # L1: trim middle
         messages[:] = compact.micro_compact(messages)         # L2: old result placeholders
@@ -80,8 +90,19 @@ def agent_loop(messages: list, *, max_turn: int = 100, max_tokens: int = 8000, i
                         if blocked is not None:
                             tool_result = json.dumps({"status": "error", "message": str(blocked)})
                         else:
-                            tool_result = execute_tool_call(tool_call, args=args)
-                            trigger_hooks("PostToolUse", block, tool_result)
+                            if (not isSubagent
+                                    and should_run_background(tool_call.function.name, args)):
+                                bg_id = start_background_task(tool_call, args)
+                                command = args.get("command", "")
+                                tool_result = (
+                                    f"[Background task {bg_id} started] "
+                                    f"Command: {command}. "
+                                    f"Output will arrive as a <task_notification> user message "
+                                    f"when the task completes or stalls."
+                                )
+                            else:
+                                tool_result = execute_tool_call(tool_call, args=args)
+                                trigger_hooks("PostToolUse", block, tool_result)
                 if not isSubagent:
                     print(f"Tool >\t {tool_call.function.name}({tool_call.function.arguments}) -> {tool_result}")
                 messages.append({
