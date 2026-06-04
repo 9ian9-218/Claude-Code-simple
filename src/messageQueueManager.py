@@ -23,6 +23,7 @@ class Priority(str, Enum):
 class PendingNotification:
     content: str
     priority: Priority
+    recipient: str | None = None
 
 
 _lock = threading.Lock()
@@ -30,10 +31,15 @@ _next_queue: list[PendingNotification] = []
 _later_queue: list[PendingNotification] = []
 
 
-def enqueue_pending_notification(content: str, priority: str = "later") -> None:
+def enqueue_pending_notification(
+    content: str,
+    priority: str = "later",
+    *,
+    recipient: str | None = None,
+) -> None:
     """入队原始通知文本。priority: 'next' | 'later'，默认 later。"""
     prio = Priority.NEXT if priority == "next" else Priority.LATER
-    item = PendingNotification(content, prio)
+    item = PendingNotification(content, prio, recipient)
     with _lock:
         if prio == Priority.NEXT:
             _next_queue.append(item)
@@ -57,16 +63,21 @@ def enqueue_task_notification(
     enqueue_pending_notification(xml, priority)
 
 
-def consume_pending_notifications() -> list[str]:
+def consume_pending_notifications(*, recipient: str | None = None) -> list[str]:
     """
     消费点（对齐 query.ts:1566-1593）：drain 队列，next 优先于 later。
-    返回待注入对话的通知文本列表。
+    recipient=None 只消费 Lead 全局通知；指定 agent 名则只消费该 agent 的后台任务通知。
     """
     with _lock:
-        next_items = _next_queue[:]
-        later_items = _later_queue[:]
-        _next_queue.clear()
-        _later_queue.clear()
+        def _matches(item: PendingNotification) -> bool:
+            if recipient is None:
+                return item.recipient is None
+            return item.recipient == recipient
+
+        next_items = [i for i in _next_queue if _matches(i)]
+        later_items = [i for i in _later_queue if _matches(i)]
+        _next_queue[:] = [i for i in _next_queue if not _matches(i)]
+        _later_queue[:] = [i for i in _later_queue if not _matches(i)]
     return [item.content for item in next_items] + [item.content for item in later_items]
 
 

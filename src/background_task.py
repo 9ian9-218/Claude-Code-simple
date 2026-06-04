@@ -35,13 +35,37 @@ def _looks_like_prompt(tail: str) -> bool:
 
 
 def is_slow_operation(tool_name: str, tool_input: dict) -> bool:
-    """Fallback heuristic: commands likely to take > 30s."""
+    """
+    判断某个工具调用（主要是 shell 命令）是否属于“慢操作”，即可能需要 30 秒以上才能完成。
+    这个函数主要用于自动判断哪些命令适合放到后台执行，避免前端阻塞等待。
+    参数:
+        tool_name (str): 工具名，只有 "run_bash" 时才会进一步判断。
+        tool_input (dict): 工具的输入参数，主要用于提取 shell 命令内容。
+    返回:
+        bool: 如果识别为慢操作，则返回 True，否则为 False。
+    逻辑说明:
+    1. 只针对 "run_bash" 工具（shell 命令），其他工具直接返回 False。
+    2. 获取命令文本，全部转为小写，便于关键词匹配。
+    3. 定义了一组典型慢操作的关键词（如 install、build、test、deploy、compile 等构建/测试/安装相关）；
+       以及常见的“慢命令”组合（docker build、pip install、npm install 等）。
+    4. 只要命令字符串包含任何一个慢关键词，就认定为慢操作，返回 True。
+    """
     if tool_name != "run_bash":
         return False
     cmd = tool_input.get("command", "").lower()
-    slow_keywords = ["install", "build", "test", "deploy", "compile",
-                     "docker build", "pip install", "npm install",
-                     "cargo build", "pytest", "make"]
+    slow_keywords = [
+        "install",       # 软件安装常常较慢
+        "build",         # 构建/编译通常较慢
+        "test",          # 大型测试耗时长
+        "deploy",        # 部署脚本依赖/环境复杂
+        "compile",       # 源码编译
+        "docker build",  # 容器镜像构建
+        "pip install",   # Python 依赖安装
+        "npm install",   # Node 依赖安装
+        "cargo build",   # Rust 构建
+        "pytest",        # 单元/集成测试
+        "make"           # makefile 通常是复杂构建
+    ]
     return any(kw in cmd for kw in slow_keywords)
 
 
@@ -54,6 +78,7 @@ def should_run_background(tool_name: str, tool_input: dict) -> bool:
 
 def _enqueue_stall_notification(
     bg_id: str, command: str, tool_use_id: str | None, tail: str,
+    *, recipient: str | None = None,
 ) -> None:
     """One-shot stall notification (no <status> — CC treats unknown status as terminal)."""
     summary = f'Background command "{command}" appears to be waiting for interactive input'
@@ -67,11 +92,12 @@ def _enqueue_stall_notification(
         f"The command is likely blocked on an interactive prompt. Kill this task and re-run "
         f"with piped input (e.g., `echo y | command`) or a non-interactive flag if one exists."
     )
-    enqueue_pending_notification(message, priority="next")
+    enqueue_pending_notification(message, priority="next", recipient=recipient)
 
 
 def _run_bash_with_exit_code(
     command: str, *, bg_id: str = "", tool_use_id: str | None = None,
+    recipient: str | None = None,
 ) -> tuple[str, int]:
     """Execute bash with streaming output and a stall watchdog."""
     try:
@@ -124,7 +150,7 @@ def _run_bash_with_exit_code(
                 if stall_notified[0]:
                     break
                 stall_notified[0] = True
-                _enqueue_stall_notification(bg_id, command, tool_use_id, tail)
+                _enqueue_stall_notification(bg_id, command, tool_use_id, tail, recipient=recipient)
                 print(f"  \033[33m[stall watchdog] {bg_id}: "
                       f"interactive prompt detected\033[0m")
             break
@@ -157,6 +183,8 @@ def _enqueue_completion_notification(
     summary: str,
     output: str,
     tool_use_id: str | None = None,
+    *,
+    recipient: str | None = None,
 ) -> None:
     """Completion payload injected into messages — include command output, not just summary."""
     if len(output) <= _COMPLETION_OUTPUT_PREVIEW:
@@ -174,7 +202,7 @@ def _enqueue_completion_notification(
         f"\nOutput:\n{preview}\n"
         f"</task_notification>"
     )
-    enqueue_pending_notification(message, priority="later")
+    enqueue_pending_notification(message, priority="later", recipient=recipient)
 
 
 def start_background_task(tool_call, args: dict) -> str:
@@ -188,10 +216,14 @@ def start_background_task(tool_call, args: dict) -> str:
     command = args.get("command", "")
     block = SimpleNamespace(name=tool_name, input=args)
 
+    from teammates.context import get_agent_context
+    ctx = get_agent_context()
+    recipient = ctx.agent_name if ctx.is_teammate else None
+
     def worker():
         if tool_name == "run_bash":
             output, exit_code = _run_bash_with_exit_code(
-                command, bg_id=bg_id, tool_use_id=tool_call.id,
+                command, bg_id=bg_id, tool_use_id=tool_call.id, recipient=recipient,
             )
         else:
             output = execute_tool_call(tool_call, args=args)
@@ -200,7 +232,7 @@ def start_background_task(tool_call, args: dict) -> str:
         trigger_hooks("PostToolUse", block, output)
         summary = _build_completion_summary(tool_name, command, exit_code)
         _enqueue_completion_notification(
-            bg_id, summary, str(output), tool_use_id=tool_call.id,
+            bg_id, summary, str(output), tool_use_id=tool_call.id, recipient=recipient,
         )
         print(f"  \033[32m[background done] {bg_id}: "
               f"{command[:40] or tool_name} (exit code {exit_code})\033[0m")

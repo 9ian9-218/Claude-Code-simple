@@ -408,16 +408,21 @@ TODO_WRITE_TOOL = build_tool(
 from prompt import SUBAGENT_IDENTITY
 
 def _spawn_subagent(args: dict[str, Any]) -> str:
-    """子 Agent：独立 messages[]，仅返回最终文本摘要。"""
+    """子 Agent：独立 messages[]，仅返回最终文本摘要。权限冒泡至 Lead 终端。"""
+    import uuid
     from agent_loop import agent_loop
+    from teammates.context import AgentContext, agent_context
 
     description = args["description"]
-    print(f"\n\033[35m[Subagent spawned]\033[0m")
+    sub_id = f"subagent-{uuid.uuid4().hex[:8]}"
+    print(f"\n\033[35m[Subagent spawned: {sub_id}]\033[0m")
+    ctx = AgentContext(agent_name=sub_id, role="subagent", agent_id=sub_id)
     messages = [
         {"role": "system", "content": SUBAGENT_IDENTITY},
         {"role": "user", "content": description},
     ]
-    result = agent_loop(messages, max_turn=30, max_tokens=6000, isSubagent=True)
+    with agent_context(ctx):
+        result = agent_loop(messages, max_turn=30, max_tokens=6000, isSubagent=True)
     if result:
         print("\033[35m[Subagent done]\033[0m")
         return result
@@ -610,6 +615,193 @@ COMPLETE_TASK_TOOL = build_tool(
     is_read_only=False,
 )
 
+# ── Teammate tools (CC-style file mailbox) ────────────────────────────────
+
+def _exec_create_team(args: dict[str, Any]) -> str:
+    from teammates.team_helpers import create_team, read_team_config
+    from teammates.poller import start_lead_inbox_poller
+    from teammates.context import get_agent_context
+
+    name = args["name"]
+    if read_team_config(name):
+        return f"Team '{name}' already exists"
+    create_team(name)
+    ctx = get_agent_context()
+    ctx.team_name = name
+    start_lead_inbox_poller(name)
+    return f"Created team '{name}' with lead inbox at ~/.claude/teams/{name}/"
+
+
+def _exec_spawn_teammate(args: dict[str, Any]) -> str:
+    from teammates.context import get_agent_context
+    from teammates.spawn import spawn_teammate
+
+    ctx = get_agent_context()
+    team_name = (args.get("team_name") or "").strip() or ctx.team_name
+    agent_type = (args.get("agent_type") or "").strip() or "general-purpose"
+    if not team_name:
+        return "Error: no team. Call create_team first or pass team_name."
+    return spawn_teammate(
+        name=args["name"],
+        role=args["role"],
+        prompt=args["prompt"],
+        team_name=team_name,
+        agent_type=agent_type,
+    )
+
+
+def _exec_send_message(args: dict[str, Any]) -> str:
+    from teammates.context import get_agent_context
+    from teammates.mailbox import send_plain_message, send_structured_message
+    from teammates.message_types import create_task_assignment
+
+    ctx = get_agent_context()
+    team_name = ctx.team_name
+    if not team_name:
+        return "Error: not in a team context"
+
+    to_agent = args["to"]
+    content = args["message"]
+    msg_type = args.get("message_type") or "plain"
+
+    if msg_type == "task_assignment":
+        payload = create_task_assignment(
+            task_id=args.get("task_id") or "",
+            subject=args.get("subject") or content[:80],
+            description=content,
+            assigned_by=ctx.agent_name,
+        )
+        send_structured_message(
+            from_agent=ctx.agent_name,
+            to_agent=to_agent,
+            payload=payload,
+            team_name=team_name,
+            color=ctx.color,
+        )
+    else:
+        send_plain_message(
+            from_agent=ctx.agent_name,
+            to_agent=to_agent,
+            text=content,
+            team_name=team_name,
+            color=ctx.color,
+            summary=args.get("summary"),
+        )
+    return f"Sent to {to_agent}"
+
+
+def _exec_list_teammates(args: dict[str, Any]) -> str:
+    from teammates.context import get_agent_context
+    from teammates.spawn import list_active_teammate_names
+    from teammates.team_helpers import list_active_teammates, read_team_config
+
+    ctx = get_agent_context()
+    team_name = (args.get("team_name") or "").strip() or ctx.team_name
+    if not team_name:
+        return "No team configured"
+    config = read_team_config(team_name)
+    if not config:
+        return f"Team '{team_name}' not found"
+    active = list_active_teammate_names()
+    lines = [f"Team: {team_name} (lead: {config.leadAgentId})"]
+    for m in list_active_teammates(team_name):
+        status = "running" if m.name in active else "idle/offline"
+        lines.append(f"  • {m.name} [{m.color}] ({m.agentType}) — {status}")
+    return "\n".join(lines) if len(lines) > 1 else lines[0] + "\n  (no teammates)"
+
+
+_CREATE_TEAM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "Team name (used in ~/.claude/teams/)"},
+    },
+    "required": ["name"],
+    "additionalProperties": False,
+}
+CREATE_TEAM_TOOL = build_tool(
+    name="create_team",
+    description=(
+        "Create a NEW team only when the user explicitly requests a separate team. "
+        "A default team already exists at startup — prefer spawn_teammate with "
+        "team_name=\"\" instead of creating another team."
+    ),
+    parameters=_CREATE_TEAM_SCHEMA,
+    execute=_exec_create_team,
+    is_read_only=False,
+)
+
+_SPAWN_TEAMMATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "Unique teammate name within the team"},
+        "role": {"type": "string", "description": "Role description, e.g. researcher"},
+        "prompt": {"type": "string", "description": "Initial task instructions"},
+        "team_name": {"type": "string", "description": "Team name; use empty string for current team"},
+        "agent_type": {
+            "type": "string",
+            "description": "Agent type; use general-purpose if unsure",
+        },
+    },
+    "required": ["name", "role", "prompt", "team_name", "agent_type"],
+    "additionalProperties": False,
+}
+SPAWN_TEAMMATE_TOOL = build_tool(
+    name="spawn_teammate",
+    description=(
+        "Spawn a background teammate to execute delegated work. "
+        "Pass team_name as empty string to use the current team. "
+        "After spawning, tell the user the teammate is working — do NOT do the "
+        "delegated work yourself. Results arrive via teammate inbox notifications."
+    ),
+    parameters=_SPAWN_TEAMMATE_SCHEMA,
+    execute=_exec_spawn_teammate,
+    is_read_only=False,
+)
+
+_SEND_MESSAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "to": {"type": "string", "description": "Recipient agent name or team-lead"},
+        "message": {"type": "string", "description": "Message body"},
+        "summary": {"type": "string", "description": "Short preview for UI"},
+        "message_type": {
+            "type": "string",
+            "enum": ["plain", "task_assignment"],
+            "description": "plain for DM; task_assignment for structured task handoff",
+        },
+        "task_id": {"type": "string", "description": "Task ID when message_type=task_assignment"},
+        "subject": {"type": "string", "description": "Task subject when message_type=task_assignment"},
+    },
+    "required": ["to", "message", "summary", "message_type", "task_id", "subject"],
+    "additionalProperties": False,
+}
+SEND_MESSAGE_TOOL = build_tool(
+    name="send_message",
+    description="Send a message to another teammate or the team lead via file mailbox.",
+    parameters=_SEND_MESSAGE_SCHEMA,
+    execute=_exec_send_message,
+    is_read_only=False,
+)
+
+_LIST_TEAMMATES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "team_name": {
+            "type": "string",
+            "description": "Team name; use empty string for current team",
+        },
+    },
+    "required": ["team_name"],
+    "additionalProperties": False,
+}
+LIST_TEAMMATES_TOOL = build_tool(
+    name="list_teammates",
+    description="List registered teammates and their active/running status.",
+    parameters=_LIST_TEAMMATES_SCHEMA,
+    execute=_exec_list_teammates,
+    is_read_only=True,
+)
+
 # ── 工具列表 ──────────────────────────────────────────────────────────────
 TOOLS = [
     TAVILY_SEARCH_TOOL,
@@ -626,6 +818,10 @@ TOOLS = [
     COMPLETE_TASK_TOOL,
     SUBAGENT_TASK_TOOL,
     LOAD_SKILL_TOOL,
+    CREATE_TEAM_TOOL,
+    SPAWN_TEAMMATE_TOOL,
+    SEND_MESSAGE_TOOL,
+    LIST_TEAMMATES_TOOL,
 ]
 
 # 工具名 → Tool 实例 的查找表
@@ -639,20 +835,33 @@ def _get_tool_map() -> dict[str, Tool]:
 SUBAGENT_EXCLUDED_TOOLS = frozenset({
     "todo_write",
     "subagent_task",
-    "tavily_search",
     "create_task",
     "claim_task",
     "complete_task",
-})  # 子 agent 不可见的工具
+    "spawn_teammate",
+    "create_team",
+    "send_message",
+    "list_teammates",
+})  # 子 agent / 队友不可见的工具
+
+
 def get_all_tools(isSubagent=False) -> list[dict[str, Any]]:
     """
     返回所有工具的 OpenAI schema 列表。
     client.py 调用此函数获取 tools 参数，传给 chat.completions.create()。
     子 agent 的工具限制在此处统一配置即可，模型看不到的工具不会被请求。
     """
-    if isSubagent:
-        return [tool.to_openai_schema() for tool in TOOLS if tool.name not in SUBAGENT_EXCLUDED_TOOLS]
-    return [tool.to_openai_schema() for tool in TOOLS]
+    from teammates.context import get_agent_context
+
+    ctx = get_agent_context()
+    if ctx.is_teammate:
+        # Teammates may DM the lead but cannot spawn nested teammates
+        excluded = SUBAGENT_EXCLUDED_TOOLS - frozenset({"send_message"})
+    elif isSubagent:
+        excluded = SUBAGENT_EXCLUDED_TOOLS
+    else:
+        excluded = frozenset()
+    return [tool.to_openai_schema() for tool in TOOLS if tool.name not in excluded]
 
 def execute_tool_call(tool_call, args: dict[str, Any] | None = None) -> str:
     """

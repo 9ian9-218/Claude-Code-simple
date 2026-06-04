@@ -1,1 +1,2 @@
 - [prefer-concise-answers](prefer-concise-answers.md) — User prefers concise answers over long complex ones.
+- [schema-sql-users-table](schema-sql-users-table.md) — User wants a schema.sql file with a users table created by backend developer Alice.

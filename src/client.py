@@ -53,10 +53,21 @@ def _ensure_system(messages, content: str) -> None:
     messages.insert(0, {"role": "system", "content": content})
 
 
-def send_messages(messages, max_tokens=8000, isSubagent=False, model=None):
-    context = update_context({}, messages)
-    system_prompt = get_system_prompt(context, isSubagent=isSubagent)
-    _ensure_system(messages, system_prompt)
+def send_messages(
+    messages,
+    max_tokens=8000,
+    isSubagent=False,
+    model=None,
+    *,
+    preserve_system: bool = False,
+    quiet_output: bool | None = None,
+):
+    if quiet_output is None:
+        quiet_output = isSubagent
+    if not preserve_system:
+        context = update_context({}, messages)
+        system_prompt = get_system_prompt(context, isSubagent=isSubagent)
+        _ensure_system(messages, system_prompt)
     stream = client.chat.completions.create(
         model=model or os.getenv("OPENAI_MODEL"),
         messages=messages,
@@ -69,7 +80,7 @@ def send_messages(messages, max_tokens=8000, isSubagent=False, model=None):
     finish_reason = None
     content_parts = []
     tool_calls_acc = {}
-    if not isSubagent:
+    if not quiet_output:
         sys.stdout.write("Model >\t ")
         sys.stdout.flush()
 
@@ -80,8 +91,9 @@ def send_messages(messages, max_tokens=8000, isSubagent=False, model=None):
 
         delta = choice.delta
         if delta.content:
-            sys.stdout.write(delta.content)
-            sys.stdout.flush()
+            if not quiet_output:
+                sys.stdout.write(delta.content)
+                sys.stdout.flush()
             content_parts.append(delta.content)
 
         if delta.tool_calls:
@@ -100,7 +112,7 @@ def send_messages(messages, max_tokens=8000, isSubagent=False, model=None):
                 if tc.function and tc.function.arguments:
                     tool_calls_acc[idx]["function"]["arguments"] += tc.function.arguments
 
-    if not isSubagent:
+    if not quiet_output:
         sys.stdout.write("\n")
         sys.stdout.flush()
 

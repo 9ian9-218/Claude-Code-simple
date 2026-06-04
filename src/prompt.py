@@ -77,6 +77,19 @@ BACKGROUND_TASKS_SECTION = (
     "kill the task and re-run with non-interactive flags or piped input.\n"
 )
 
+TEAMS_SECTION = (
+    "\n\n## Agent teams (Lead + Teammates)\n"
+    "A default team is already initialized at startup — do NOT call create_team unless "
+    "the user explicitly asks for a separate team name.\n"
+    "- Delegate parallel work with spawn_teammate(name, role, prompt, team_name=\"\", ...).\n"
+    "- Pass team_name as empty string to use the current team.\n"
+    "- After spawning: tell the user the teammate is working; do NOT implement the "
+    "teammate's task yourself (no write_file/edit_file for work you delegated).\n"
+    "- Teammate results arrive as <teammate-message> injections or [Teammate update] "
+    "notifications — summarize them for the user.\n"
+    "- Use send_message to assign follow-up work; use list_teammates to check status.\n"
+)
+
 SUBAGENT_IDENTITY = (
     f"You are a coding agent at {WORKDIR}. "
     "Complete the task you were given, then return a concise summary. "
@@ -146,6 +159,7 @@ PROMPT_SECTIONS = {
     "identity": AGENT_IDENTITY,
     "task_planning": TASK_PLANNING_SECTION,
     "background_tasks": BACKGROUND_TASKS_SECTION,
+    "teams": TEAMS_SECTION,
     "subagent_identity": SUBAGENT_IDENTITY,
     "workspace": f"Working directory: {WORKDIR}",
     "memory_hint": "Relevant memories may be injected into the user message when applicable.",
@@ -164,6 +178,7 @@ def assemble_system_prompt(context: dict, *, isSubagent: bool = False) -> str:
     if not isSubagent:
         parts.append(PROMPT_SECTIONS["task_planning"])
         parts.append(PROMPT_SECTIONS["background_tasks"])
+        parts.append(PROMPT_SECTIONS["teams"])
     # skill 段：context 里存的是已格式化的 skill section（即 SKILL_CATALOG）
     skill_catalog = context.get("skill_catalog", "")
     if skill_catalog:

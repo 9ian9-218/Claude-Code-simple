@@ -166,6 +166,8 @@ def send_messages_with_recovery(
     state: RecoveryState,
     max_tokens: int,
     isSubagent: bool = False,
+    preserve_system: bool = False,
+    quiet_output: bool | None = None,
 ) -> LLMInvokeResult:
     """
     带错误恢复的 LLM 调用（agent_loop 统一入口）。
@@ -183,6 +185,8 @@ def send_messages_with_recovery(
                 max_tokens=max_tokens,
                 isSubagent=isSubagent,
                 model=state.current_model,
+                preserve_system=preserve_system,
+                quiet_output=quiet_output,
             ),
             state,
         )

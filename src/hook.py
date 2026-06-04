@@ -3,7 +3,7 @@
 import threading
 from typing import Any, Callable
 
-from check_permissions import permission_hook
+from permission_sync import permission_hook_with_bubble as permission_hook
 
 
 def register_hook(event: str, callback: Callable[..., Any]) -> None:
@@ -73,6 +73,12 @@ def validate_hook(block) -> str | None:
 
 
 def log_hook(block) -> None:
+    from teammates.context import get_agent_context
+
+    ctx = get_agent_context()
+    if ctx.is_teammate:
+        print(f"\033[90m[{ctx.agent_name}] {block.name}(...)\033[0m")
+        return
     print(f"\033[90m[HOOK] {block.name}(...)\033[0m")
 
 
