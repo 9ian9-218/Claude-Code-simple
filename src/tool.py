@@ -100,7 +100,7 @@ def build_tool(
         is_read_only=is_read_only,
     )
 
-from config import WORKDIR
+from config import MEMORY_DIR, TEAMS_DIR, WORKDIR
 # ── 路径校验工具 ──────────────────────────────────────────────────────────
 def _check_path(p: str) -> str | None:
     """检查路径是否在 WORKDIR 内，返回错误信息或 None。"""
@@ -246,7 +246,7 @@ READ_FILE_TOOL = build_tool(
 
 #write_file
 def _maybe_rebuild_memory_index(file_path: Path) -> None:
-    """write_file 写入 .memory/*.md 后刷新 MEMORY.md 索引（MEMORY.md 本身除外）。"""
+    """write_file 写入 memory/*.md 后刷新 MEMORY.md 索引（MEMORY.md 本身除外）。"""
     from memory import MEMORY_DIR, _rebuild_index
 
     if file_path.name == "MEMORY.md" or file_path.suffix != ".md":
@@ -333,7 +333,7 @@ _GLOB_SCHEMA = {
     "properties": {
         "pattern": {
             "type": "string",
-            "description": "Glob pattern relative to WORKDIR (e.g. '**/*.py', 'Claude-Code/skills/*'). Match case exactly — Linux is case-sensitive.",
+            "description": "Glob pattern relative to WORKDIR (e.g. '**/*.py', '.claude/skills/*'). Match case exactly — Linux is case-sensitive.",
         },
     },
     "required": ["pattern"],
@@ -472,7 +472,7 @@ LOAD_SKILL_TOOL = build_tool(
     is_read_only=True,
 )
 
-# ── Task system（.tasks/ 持久化）────────────────────────────────────
+# ── Task system（.claude/tasks/ 持久化）──────────────────────────────────
 
 from tasks import (
     run_claim_task,
@@ -527,7 +527,7 @@ _CREATE_TASK_SCHEMA = {
 CREATE_TASK_TOOL = build_tool(
     name="create_task",
     description=(
-        "Plan phase: create a persisted task in .tasks/ (use during initial planning "
+        "Plan phase: create a persisted task in .claude/tasks/ (use during initial planning "
         "for large multi-step goals). Set blockedBy for dependencies; "
         "blocks on upstream tasks is maintained automatically. "
         "Pass empty string / empty array when description or blockedBy are not needed. "
@@ -629,7 +629,7 @@ def _exec_create_team(args: dict[str, Any]) -> str:
     ctx = get_agent_context()
     ctx.team_name = name
     start_lead_inbox_poller(name)
-    return f"Created team '{name}' with lead inbox at ~/.claude/teams/{name}/"
+    return f"Created team '{name}' with lead inbox at {TEAMS_DIR / name}/"
 
 
 def _exec_spawn_teammate(args: dict[str, Any]) -> str:
@@ -713,7 +713,7 @@ def _exec_list_teammates(args: dict[str, Any]) -> str:
 _CREATE_TEAM_SCHEMA = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "description": "Team name (used in ~/.claude/teams/)"},
+        "name": {"type": "string", "description": "Team name (stored under .claude/teams/)"},
     },
     "required": ["name"],
     "additionalProperties": False,

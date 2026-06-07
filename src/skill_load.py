@@ -1,8 +1,6 @@
 from pathlib import Path
 
-from config import PROJECT_ROOT
-
-SKILLS_DIR = PROJECT_ROOT / "skills"
+from config import SKILLS_DIR
 
 SKILL_REGISTRY: dict[str, dict] = {}
 

@@ -53,11 +53,7 @@ def _ensure_system(messages, content: str) -> None:
     messages.insert(0, {"role": "system", "content": content})
 
 
-def send_messages(
-    messages,
-    max_tokens=8000,
-    isSubagent=False,
-    model=None,
+def send_messages(messages,max_tokens=8000,isSubagent=False,model=None,
     *,
     preserve_system: bool = False,
     quiet_output: bool | None = None,

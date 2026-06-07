@@ -1,4 +1,4 @@
-"""Team config CRUD (~/.claude/teams/{teamName}/config.json)."""
+"""Team config CRUD (.claude/teams/{teamName}/config.json)."""
 
 from __future__ import annotations
 

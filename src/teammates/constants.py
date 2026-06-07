@@ -1,12 +1,9 @@
 """Teammate swarm constants (aligned with CC swarm/constants.ts)."""
 
-from pathlib import Path
+from config import TEAMS_DIR
 
 TEAM_LEAD_NAME = "team-lead"
 TEAMMATE_MESSAGE_TAG = "teammate-message"
-
-# ~/.claude/teams/
-TEAMS_DIR = Path.home() / ".claude" / "teams"
 
 # Agent colors for UI / mailbox metadata
 AGENT_COLORS = (

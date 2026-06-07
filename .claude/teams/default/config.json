@@ -1,0 +1,42 @@
+{
+  "name": "default",
+  "leadAgentId": "team-lead@default",
+  "members": [
+    {
+      "agentId": "team-lead@default",
+      "name": "team-lead",
+      "agentType": "lead",
+      "color": "white",
+      "isActive": true,
+      "joinedAt": "2026-06-04T10:53:24.641672+00:00",
+      "model": null
+    },
+    {
+      "agentId": "alice@default",
+      "name": "alice",
+      "agentType": "general-purpose",
+      "color": "blue",
+      "isActive": true,
+      "joinedAt": "2026-06-04T13:12:46.460498+00:00",
+      "model": null
+    },
+    {
+      "agentId": "Alice@default",
+      "name": "Alice",
+      "agentType": "general-purpose",
+      "color": "green",
+      "isActive": true,
+      "joinedAt": "2026-06-04T13:19:48.144527+00:00",
+      "model": null
+    },
+    {
+      "agentId": "Bob@default",
+      "name": "Bob",
+      "agentType": "general-purpose",
+      "color": "yellow",
+      "isActive": true,
+      "joinedAt": "2026-06-04T13:21:45.918930+00:00",
+      "model": null
+    }
+  ]
+}

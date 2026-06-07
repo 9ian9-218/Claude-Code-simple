@@ -10,7 +10,7 @@
 | Tool Dispatch | s02 | ✅ | `Tool` 抽象 + Schema 校验 + 15+ 内置工具 |
 | Todo / Permission | s03 | ✅ | 任务清单、三级权限门控（黑名单 / 规则 / 用户确认） |
 | Hooks | s04 | ✅ | 事件驱动扩展（PreToolUse / PostToolUse / Stop） |
-| Skill Loading | s05 | ✅ | 扫描 `skills/` 目录，按需加载 SKILL.md |
+| Skill Loading | s05 | ✅ | 扫描 `.claude/skills/` 目录，按需加载 SKILL.md |
 | Context Compact | s06 | ✅ | 四层压缩：Snip / Micro / Budget / Auto Compact |
 | Task System | s07 | ✅ | 文件持久化任务看板，依赖图 + claim/complete |
 | Background Tasks | s13 | ✅ | 长耗时 bash 后台线程，结果注入主循环 |
@@ -120,7 +120,7 @@ python main.py
 | `glob` | 按模式搜索文件 |
 | `todo_write` | 会话内任务清单 |
 | `tavily_search` | 网络搜索（需 TAVILY_API_KEY） |
-| `load_skill` | 加载 `skills/` 下的 SKILL.md |
+| `load_skill` | 加载 `.claude/skills/` 下的 SKILL.md |
 | `subagent_task` | 启动进程内子 Agent |
 | `create_task` / `list_tasks` / `get_task` | 持久化任务看板 |
 | `claim_task` / `complete_task` | 任务认领与完成 |
@@ -157,13 +157,15 @@ Claude-Code-simple/
 │       ├── lifecycle.py    # 生命周期（idle / shutdown）
 │       ├── message_types.py    # 结构化协议消息
 │       └── team_helpers.py # 团队配置持久化
-├── skills/                 # 可加载的 Skill 定义
-├── .memory/                # 长期记忆（运行时生成）
-├── .tasks/                 # 任务看板数据（运行时生成）
+├── .claude/                # 项目内运行时数据
+│   ├── teams/              # 多 Agent 团队配置与邮箱
+│   ├── memory/             # 长期记忆
+│   ├── tasks/              # 任务看板
+│   └── skills/             # 可加载的 Skill 定义
 └── .env                    # 环境变量（不提交）
 ```
 
-运行时还会在 `~/.claude/teams/` 下持久化团队配置与邮箱。
+团队、记忆、任务、Skill 均持久化在项目根目录的 `.claude/` 下，不写入 `~/.claude`。
 
 ## 核心机制
 
@@ -219,7 +221,7 @@ Lead 会 `spawn_teammate` 并通过 `send_message` 分配任务，Teammate 在�
 
 ## 扩展 Skill
 
-在 `skills/<name>/SKILL.md` 中添加 Frontmatter 定义：
+在 `.claude/skills/<name>/SKILL.md` 中添加 Frontmatter 定义：
 
 ```markdown
 ---

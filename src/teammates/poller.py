@@ -53,12 +53,19 @@ def consume_pending_idle_notifications() -> list[dict[str, Any]]:
     return items
 
 
+# _permission_request_id 函数用于从结构化的权限请求消息（parsed，为dict）中提取该请求的唯一ID。
+# 其中，如果是沙盒权限请求（sandbox=True）则使用 "requestId" 字段，否则使用普通的 "request_id" 字段。
 def _permission_request_id(parsed: dict[str, Any], *, sandbox: bool) -> str:
     if sandbox:
         return str(parsed.get("requestId", ""))
     return str(parsed.get("request_id", ""))
 
-
+# _enqueue_permission_request 函数将一个解析好的权限请求（字典）加入到队列_pending_permission_requests。
+# 具体步骤：
+# 1. 先通过_request_permission_id计算当前请求的唯一ID。
+# 2. 加锁后，从已有的_pending_permission_requests中提取所有已有ID，去重。
+# 3. 若本次请求ID在已有集合里则不添加，保证每个权限请求仅被处理一次。
+# 4. 否则将该item加入队列，等待主线程/业务流程处理。
 def _enqueue_permission_request(item: dict[str, Any]) -> None:
     parsed = item["parsed"]
     sandbox = item.get("sandbox", False)
@@ -71,9 +78,19 @@ def _enqueue_permission_request(item: dict[str, Any]) -> None:
         if req_id and req_id in existing:
             return
         _pending_permission_requests.append(item)
+   
 
 
 def _route_message(entry: dict[str, Any], index: int, team_name: str, lead_name: str) -> None:
+    """
+    负责将收到的结构化消息（entry）根据类型分发到对应的处理函数。
+
+    参数:
+        entry:       当前邮箱中的消息字典，包含text等字段
+        index:       此消息在邮箱中的下标，用于“标记已读”
+        team_name:   当前团队名
+        lead_name:   团队lead成员ID
+    """
     text = entry.get("text", "")
     if not is_structured_protocol_message(text):
         return
@@ -120,6 +137,10 @@ def _route_message(entry: dict[str, Any], index: int, team_name: str, lead_name:
 
 
 def _lead_poll_loop() -> None:
+    """
+    主轮询循环，负责从团队主管（lead）的邮箱中轮询消息，并处理这些消息。
+    这个循环会一直运行，直到 _lead_poller_stop 事件被设置（即停止标志被触发）。
+    """
     while not _lead_poller_stop.is_set():
         team_name = _team_name
         if not team_name:
@@ -160,6 +181,8 @@ def start_lead_inbox_poller(team_name: str) -> None:
     if _lead_poller_thread and _lead_poller_thread.is_alive():
         return
     _lead_poller_stop.clear()
+    # 创建并初始化一个新线程，用于轮询（poll）团队lead邮箱队列（lead inbox）。
+    # 该线程的目标函数是 _lead_poll_loop，线程名称设为 "lead-inbox-poller"，并以守护线程（daemon）的方式运行。
     _lead_poller_thread = threading.Thread(
         target=_lead_poll_loop,
         daemon=True,

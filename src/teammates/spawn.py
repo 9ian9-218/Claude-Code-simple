@@ -37,19 +37,6 @@ def _teammate_identity(name: str, role: str, team_name: str) -> str:
     )
 
 
-def _notify_lead_teammate_update(name: str, team_name: str, summary: str) -> None:
-    """Queue a high-priority notification for the Lead's next agent_loop turn."""
-    from messageQueueManager import enqueue_pending_notification
-
-    preview = summary.strip()
-    if len(preview) > 800:
-        preview = preview[:800] + "\n...(truncated)"
-    enqueue_pending_notification(
-        f"[Teammate update] {name}@{team_name}:\n{preview}",
-        priority="next",
-    )
-
-
 def _process_teammate_inbox(
     *,
     name: str,
@@ -156,10 +143,9 @@ def _run_teammate_loop(
                     team_name=team_name,
                     color=color,
                 )
-                _notify_lead_teammate_update(name, team_name, result)
                 print(
                     f"  \033[36m[{name}]\033[0m task done — "
-                    f"report queued for lead"
+                    f"report sent to lead inbox"
                 )
 
             send_idle_notification(agent_name=name, team_name=team_name)
@@ -182,11 +168,9 @@ def spawn_teammate(
     """Spawn a teammate in a background thread (CC spawnMultiAgent in-process backend)."""
     if read_team_config(team_name) is None:
         return f"Error: team '{team_name}' not found. Use create_team first."
-
     with _teammate_lock:
         if name in _active_teammates:
             return f"Teammate '{name}' already active"
-
     try:
         member = add_teammate(team_name, name, agent_type=agent_type)
     except ValueError as e:

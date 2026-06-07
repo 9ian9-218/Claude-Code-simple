@@ -19,21 +19,22 @@ def _gen_id(prefix: str = "req") -> str:
 # ── Plain text is wrapped in TeammateMessage.text, not a separate JSON type ──
 
 STRUCTURED_TYPES = frozenset({
-    "idle_notification",
-    "permission_request",
-    "permission_response",
-    "plan_approval_request",
-    "plan_approval_response",
-    "shutdown_request",
-    "shutdown_approved",
-    "shutdown_rejected",
-    "task_assignment",
-    "team_permission_update",
-    "mode_set_request",
-    "sandbox_permission_request",
-    "sandbox_permission_response",
-    "teammate_terminated",
+    "idle_notification",            # 队员空闲或状态通知
+    "permission_request",           # 请求权限
+    "permission_response",          # 权限请求的回复
+    "plan_approval_request",        # 行动/计划审批请求
+    "plan_approval_response",       # 计划审批的同意/拒绝
+    "shutdown_request",             # 请求关闭 teammate
+    "shutdown_approved",            # 同意关闭
+    "shutdown_rejected",            # 拒绝关闭
+    "task_assignment",              # 新任务下达
+    "team_permission_update",       # 团队权限有变
+    "mode_set_request",             # 请求切换模式
+    "sandbox_permission_request",   # 请求沙盒操作权限
+    "sandbox_permission_response",  # 沙盒权限审批结果
+    "teammate_terminated",          # teammate 被移除
 })
+# 除上述类型之外的普通消息（plain text）直接作为文本发送/存储，通常用于日常沟通、进度报告、系统/自然语言交互等，不需特殊结构化解析。
 
 
 def is_structured_protocol_message(text: str) -> bool:

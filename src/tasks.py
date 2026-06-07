@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from config import WORKDIR
+from config import TASKS_DIR
 """
 CC 任务系统字段：(本项目包括了其中 7 个字段)
 字段	类型	用途
@@ -20,9 +20,7 @@ metadata	Record?	任意扩展键值对，不包括
 """
 # ── Task System ──
 
-TASKS_DIR = WORKDIR / ".tasks"
 HIGHWATERMARK_FILE = TASKS_DIR / ".highwatermark"
-TASKS_DIR.mkdir(exist_ok=True)
 
 
 @dataclass

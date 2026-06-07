@@ -39,6 +39,9 @@ PERMISSION_POLL_INTERVAL_SEC = WORKER_PERMISSION_POLL_INTERVAL
 
 @dataclass
 class SwarmPermissionRequest:
+    """
+    权限请求类，用于封装权限请求的详细信息。
+    """
     id: str
     worker_name: str
     worker_id: str
@@ -177,7 +180,7 @@ def process_lead_permission_queue(team_name: str) -> None:
 
 
 def _resolve_permission_item(item: dict[str, Any], team_name: str) -> None:
-    """Resolve a single queued permission request (must run on main thread)."""
+    """Resolve a single queued permission request (run on main thread)."""
     parsed = item["parsed"]
     entry = item["entry"]
     index = item["index"]

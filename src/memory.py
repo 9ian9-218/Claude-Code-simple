@@ -1,12 +1,10 @@
-from config import WORKDIR
+from config import MEMORY_DIR
 import time
 import json
 import re
 import os
 
 MEMORY_TYPES = ["user", "feedback", "project", "reference"]
-MEMORY_DIR = WORKDIR / ".memory"
-MEMORY_DIR.mkdir(exist_ok=True)
 MEMORY_INDEX = MEMORY_DIR / "MEMORY.md"
 
 

@@ -1,5 +1,5 @@
 """
-File-based teammate mailbox (~/.claude/teams/{team}/inboxes/{agent}.json).
+File-based teammate mailbox (.claude/teams/{team}/inboxes/{agent}.json).
 
 Each inbox is a JSON array. Writes use file locking with up to 10 retries
 (proper-lockfile semantics via fcntl on Linux).
@@ -36,6 +36,11 @@ def get_inbox_path(agent_name: str, team_name: str) -> Path:
 
 
 def ensure_inbox_dir(team_name: str) -> Path:
+    """
+    确保指定团队的收件箱目录存在。
+    如果目录不存在，则创建该目录及其所有父目录。
+    返回创建后的目录路径。
+    """
     inbox_dir = TEAMS_DIR / sanitize_path_component(team_name) / "inboxes"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     return inbox_dir
@@ -43,9 +48,12 @@ def ensure_inbox_dir(team_name: str) -> Path:
 
 @contextmanager
 def _file_lock(lock_path: Path) -> Iterator[None]:
-    """Advisory lock with exponential backoff (max LOCK_RETRIES attempts)."""
+    """
+    文件锁机制，用于确保对邮箱文件的并发访问安全。
+    使用建议锁（advisory lock）机制，通过 fcntl 模块实现。
+    在 LOCK_RETRIES 次尝试内，如果无法获取锁，则抛出 TimeoutError 异常。
+    """
     import fcntl
-
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     last_err: OSError | None = None
     for attempt in range(LOCK_RETRIES):
@@ -74,6 +82,11 @@ def _file_lock(lock_path: Path) -> Iterator[None]:
 
 
 def read_mailbox(agent_name: str, team_name: str) -> list[dict[str, Any]]:
+    """
+    从指定团队的指定 agent 的邮箱中读取所有消息。
+    如果邮箱文件不存在，则返回空列表。
+    如果读取失败（如 JSON 解析错误或文件读取错误），也返回空列表。
+    """
     inbox_path = get_inbox_path(agent_name, team_name)
     if not inbox_path.exists():
         return []

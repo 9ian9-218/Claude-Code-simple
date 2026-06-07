@@ -26,7 +26,7 @@ mcp_instructions 是唯一的易失性 section（通过 DANGEROUS_uncachedSystem
 
 import json
 
-from config import WORKDIR
+from config import MEMORY_DIR, TASKS_DIR, WORKDIR
 
 # =============================================================================
 # System prompt — 主 agent
@@ -40,7 +40,7 @@ AGENT_IDENTITY = (
 
 # 大型多步目标：先规划（create_task）再执行（claim → work → complete）
 TASK_PLANNING_SECTION = (
-    f"\n\n## Plan and resolve (persisted tasks in {WORKDIR}/.tasks)\n"
+    f"\n\n## Plan and resolve (persisted tasks in {TASKS_DIR})\n"
     "When the user gives a large or multi-step goal (feature, refactor, migration, "
     "several files, or work that may span many tool rounds), use the persisted task "
     "system — do NOT jump straight into bash/read/write for the whole goal.\n\n"
@@ -85,8 +85,8 @@ TEAMS_SECTION = (
     "- Pass team_name as empty string to use the current team.\n"
     "- After spawning: tell the user the teammate is working; do NOT implement the "
     "teammate's task yourself (no write_file/edit_file for work you delegated).\n"
-    "- Teammate results arrive as <teammate-message> injections or [Teammate update] "
-    "notifications — summarize them for the user.\n"
+    "- Teammate results arrive as <teammate-message> inbox injections — "
+    "summarize them for the user.\n"
     "- Use send_message to assign follow-up work; use list_teammates to check status.\n"
 )
 
@@ -104,14 +104,14 @@ def build_skill_section(catalog: str) -> str:
 
 MEMORY_SECTION_EMPTY = (
     f"\n\nNo memories stored yet.\n"
-    f"Memory directory: {WORKDIR}/.memory\n"
+    f"Memory directory: {MEMORY_DIR}\n"
     "Relevant memories may be injected into the user message when applicable.\n"
     "When the user says 'remember' or expresses a clear preference, extract it as a memory."
 )
 
 MEMORY_SECTION_WITH_INDEX = (
     f"\n\nMemories available:\n{{index}}\n"
-    f"Memory directory: {WORKDIR}/.memory\n"
+    f"Memory directory: {MEMORY_DIR}\n"
     "Relevant memories are injected into the latest user message when applicable.\n"
     "Respect user preferences from memory.\n"
     "When the user says 'remember' or expresses a clear preference, extract it as a memory."
