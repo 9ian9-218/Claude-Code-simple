@@ -61,13 +61,16 @@ def ask_user(tool_name: str, args: dict[str, Any], reason: str) -> str:
 
 def check_permission(tool_name: str, args: dict[str, Any]) -> str | None:
     """三道门权限管线，返回 None 表示通过，返回 str 表示拒绝原因。"""
-    if tool_name == "run_bash":
+    from mcp_integration.names import underlying_tool_name
+
+    effective_name = underlying_tool_name(tool_name)
+    if effective_name == "run_bash":
         reason = check_deny_list(args.get("command", ""))
         if reason:
             print(f"\n\033[31m⛔ {reason}\033[0m")
             return reason
 
-    reason = check_rules(tool_name, args)
+    reason = check_rules(effective_name, args)
     if reason:
         decision = ask_user(tool_name, args, reason)
         if decision == "deny":

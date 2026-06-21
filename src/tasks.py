@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from config import TASKS_DIR
+from console_lock import locked_print
+from file_lock import file_lock
 """
 CC 任务系统字段：(本项目包括了其中 7 个字段)
 字段	类型	用途
@@ -36,6 +38,19 @@ class Task:
 
 def _task_path(task_id: str) -> Path:
     return TASKS_DIR / f"{task_id}.json"
+
+
+def _task_lock_path(task_id: str) -> Path:
+    path = _task_path(task_id)
+    return path.with_suffix(path.suffix + ".lock")
+
+
+def _read_task_file(path: Path) -> Task:
+    return _task_from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _write_task_file(path: Path, task: Task) -> None:
+    path.write_text(json.dumps(asdict(task), indent=2), encoding="utf-8")
 
 
 def parse_task_num(task_id: str) -> int | None:
@@ -261,47 +276,195 @@ def can_start(task_id: str) -> bool:
     """Check if all blockedBy dependencies are completed.
     Missing dependencies are treated as blocked."""
     task = load_task(task_id)
+    tasks = _load_all_tasks_raw()
+    return _deps_satisfied(task, _unresolved_task_ids(tasks))
+
+
+def _task_list_lock_path() -> Path:
+    return TASKS_DIR / ".lock"
+
+
+def _load_all_tasks_raw() -> list[Task]:
+    """Load all tasks from disk (caller holds task-list lock for consistent snapshots)."""
+    tasks = [
+        _task_from_dict(json.loads(p.read_text(encoding="utf-8")))
+        for p in TASKS_DIR.glob("task_*.json")
+    ]
+    tasks.sort(key=lambda t: parse_task_num(t.id) or 0)
+    return tasks
+
+
+def _unresolved_task_ids(tasks: list[Task]) -> set[str]:
+    """Tasks that are not yet completed (aligned with CC unresolvedTaskIds)."""
+    return {t.id for t in tasks if t.status != "completed"}
+
+
+def _deps_satisfied(task: Task, unresolved: set[str]) -> bool:
+    """All blockedBy deps exist and are completed (not in unresolved set)."""
     for dep_id in task.blockedBy:
         if not _task_path(dep_id).exists():
             return False
-        if load_task(dep_id).status != "completed":
+        if dep_id in unresolved:
             return False
     return True
 
 
-def claim_task(task_id: str, owner: str = "agent") -> str:
-    task = load_task(task_id)
-    if task.status != "pending":
-        return f"Task {task_id} is {task.status}, cannot claim"
-    if not can_start(task_id):
-        deps = [d for d in task.blockedBy
-                if not _task_path(d).exists() or load_task(d).status != "completed"]
-        return f"Blocked by: {deps}"
-    task.owner = owner
-    task.status = "in_progress"
-    save_task(task)
-    print(f"  \033[36m[claim] {task.subject} → in_progress (owner: {owner})\033[0m")
-    return f"Claimed {task.id} ({task.subject})"
+def _find_available_task(tasks: list[Task]) -> Task | None:
+    """First pending, unowned task whose blockedBy deps are all completed (CC findAvailableTask)."""
+    unresolved = _unresolved_task_ids(tasks)
+    for task in tasks:
+        if task.status != "pending" or task.owner:
+            continue
+        if _deps_satisfied(task, unresolved):
+            return task
+    return None
 
 
-def complete_task(task_id: str) -> str:
-    task = load_task(task_id)
-    if task.status != "in_progress":
-        return f"Task {task_id} is {task.status}, cannot complete"
-    task.status = "completed"
-    save_task(task)
+def _agent_busy_task(tasks: list[Task], owner: str) -> Task | None:
+    """Return in_progress task already owned by this agent (CC busy check)."""
+    for task in tasks:
+        if task.owner == owner and task.status == "in_progress":
+            return task
+    return None
+
+
+def _execute_task_claim(task_id: str, owner: str) -> str:
+    """Per-task file lock: read-check-write → in_progress (CC claimTask body)."""
+    path = _task_path(task_id)
+    if not path.exists():
+        raise FileNotFoundError(task_id)
+
+    with file_lock(_task_lock_path(task_id)):
+        task = _read_task_file(path)
+        if task.status != "pending":
+            return f"Task {task_id} is {task.status}, cannot claim"
+        if task.owner:
+            return f"Task {task_id} already owned by {task.owner}"
+        tasks = _load_all_tasks_raw()
+        if not _deps_satisfied(task, _unresolved_task_ids(tasks)):
+            deps = [
+                d for d in task.blockedBy
+                if d in _unresolved_task_ids(tasks) or not _task_path(d).exists()
+            ]
+            return f"Blocked by: {deps}"
+        task.owner = owner
+        task.status = "in_progress"
+        _write_task_file(path, task)
+        subject = task.subject
+        task_ref = task.id
+
+    locked_print(f"  \033[36m[claim] {subject} → in_progress (owner: {owner})\033[0m")
+    return f"Claimed {task_ref} ({subject})"
+
+
+def claim_task_with_busy_check(
+    owner: str,
+    task_id: str | None = None,
+    *,
+    enforce_busy: bool = True,
+) -> str:
+    """
+    CC claimTaskWithBusyCheck: task-list lock → busy check → find/select → claim.
+    Lock order: list lock, then per-task file lock (no deadlock with claim-only paths).
+    """
+    _ensure_blocks_index()
+    with file_lock(_task_list_lock_path()):
+        tasks = _load_all_tasks_raw()
+
+        if enforce_busy:
+            busy = _agent_busy_task(tasks, owner)
+            if busy is not None:
+                return (
+                    f"Agent '{owner}' is busy with {busy.id} ({busy.subject}); "
+                    f"complete it before claiming another task"
+                )
+
+        if task_id is not None:
+            target = next((t for t in tasks if t.id == task_id), None)
+            if target is None:
+                return f"Error: Task {task_id} not found"
+            unresolved = _unresolved_task_ids(tasks)
+            if target.status != "pending":
+                return f"Task {task_id} is {target.status}, cannot claim"
+            if target.owner:
+                return f"Task {task_id} already owned by {target.owner}"
+            if not _deps_satisfied(target, unresolved):
+                deps = [
+                    d for d in target.blockedBy
+                    if d in unresolved or not _task_path(d).exists()
+                ]
+                return f"Blocked by: {deps}"
+            chosen_id = task_id
+        else:
+            available = _find_available_task(tasks)
+            if available is None:
+                return "No unclaimed tasks available"
+            chosen_id = available.id
+
+        return _execute_task_claim(chosen_id, owner)
+
+
+def try_claim_next_task(owner: str) -> str:
+    """Autonomous claim: busy check + findAvailable + claim atomically (CC tryClaimNextTask)."""
+    return claim_task_with_busy_check(owner, task_id=None, enforce_busy=True)
+
+
+def scan_unclaimed_tasks() -> list[Task]:
+    """Pending, unowned tasks with all blockedBy dependencies completed (s17)."""
+    _ensure_blocks_index()
+    with file_lock(_task_list_lock_path()):
+        tasks = _load_all_tasks_raw()
+        unresolved = _unresolved_task_ids(tasks)
+        return [
+            t for t in tasks
+            if t.status == "pending" and not t.owner and _deps_satisfied(t, unresolved)
+        ]
+
+
+def claim_task(
+    task_id: str,
+    owner: str = "agent",
+    *,
+    enforce_busy: bool = False,
+) -> str:
+    """Claim a specific task. Workers should pass enforce_busy=True (via run_claim_task)."""
+    return claim_task_with_busy_check(
+        owner, task_id=task_id, enforce_busy=enforce_busy
+    )
+
+
+def complete_task(task_id: str, *, owner: str | None = None) -> str:
+    path = _task_path(task_id)
+    if not path.exists():
+        raise FileNotFoundError(task_id)
+
+    with file_lock(_task_lock_path(task_id)):
+        task = _read_task_file(path)
+        if task.status != "in_progress":
+            return f"Task {task_id} is {task.status}, cannot complete"
+        if owner is not None and task.owner is not None and task.owner != owner:
+            return (
+                f"Task {task_id} is owned by {task.owner}; "
+                f"only the owner can complete it"
+            )
+        task.status = "completed"
+        _write_task_file(path, task)
+        subject = task.subject
+        task_ref = task.id
+        block_ids = list(task.blocks)
+
     unblocked: list[str] = []
-    for down_id in task.blocks:
+    for down_id in block_ids:
         if not _task_path(down_id).exists():
             continue
         downstream = load_task(down_id)
         if downstream.status == "pending" and can_start(down_id):
             unblocked.append(downstream.subject)
-    print(f"  \033[32m[complete] {task.subject} ✓\033[0m")
-    msg = f"Completed {task.id} ({task.subject})"
+    locked_print(f"  \033[32m[complete] {subject} ✓\033[0m")
+    msg = f"Completed {task_ref} ({subject})"
     if unblocked:
         msg += f"\nUnblocked: {', '.join(unblocked)}"
-        print(f"  \033[33m[unblocked] {', '.join(unblocked)}\033[0m")
+        locked_print(f"  \033[33m[unblocked] {', '.join(unblocked)}\033[0m")
     return msg
 
 
@@ -314,7 +477,7 @@ def run_create_task(subject: str, description: str = "",
     except ValueError as e:
         return f"Error: {e}"
     deps = f" (blockedBy: {', '.join(blockedBy)})" if blockedBy else ""
-    print(f"  \033[34m[create] {task.subject}{deps}\033[0m")
+    locked_print(f"  \033[34m[create] {task.subject}{deps}\033[0m")
     return f"Created {task.id}: {task.subject}{deps}"
 
 
@@ -343,15 +506,29 @@ def run_get_task(task_id: str) -> str:
         return f"Error: Task {task_id} not found"
 
 
-def run_claim_task(task_id: str) -> str:
-    try:
-        return claim_task(task_id, owner="agent")
-    except FileNotFoundError:
-        return f"Error: Task {task_id} not found"
+def run_claim_task(task_id: str, owner: str | None = None) -> str:
+    enforce_busy = False
+    if owner is None:
+        try:
+            from teammates.context import get_agent_context
+            ctx = get_agent_context()
+            owner = ctx.agent_name if ctx.is_worker else "agent"
+            enforce_busy = ctx.is_worker
+        except ImportError:
+            owner = "agent"
+    return claim_task(task_id, owner=owner, enforce_busy=enforce_busy)
 
 
 def run_complete_task(task_id: str) -> str:
+    owner: str | None = None
     try:
-        return complete_task(task_id)
+        from teammates.context import get_agent_context
+        ctx = get_agent_context()
+        if ctx.is_worker:
+            owner = ctx.agent_name
+    except ImportError:
+        pass
+    try:
+        return complete_task(task_id, owner=owner)
     except FileNotFoundError:
         return f"Error: Task {task_id} not found"

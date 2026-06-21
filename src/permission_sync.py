@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from teammates.constants import WORKER_PERMISSION_POLL_INTERVAL
 from teammates.context import get_agent_context
-from teammates.mailbox import read_unread_messages, send_structured_message, mark_messages_as_read
+from teammates.mailbox import send_structured_message, mark_message_as_read_by_index
 from teammates.message_types import (
     create_permission_request_message,
     create_permission_response_message,
@@ -235,16 +235,20 @@ def poll_for_permission_response(
     timeout_sec: float = PERMISSION_POLL_TIMEOUT_SEC,
 ) -> PermissionResolution | None:
     """Worker-side: poll own inbox for permission_response (500ms interval)."""
+    from teammates.mailbox import read_mailbox
+
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
-        inbox = read_unread_messages(agent_name, team_name)
-        for entry in inbox:
+        full_mailbox = read_mailbox(agent_name, team_name)
+        for i, entry in enumerate(full_mailbox):
+            if entry.get("read"):
+                continue
             parsed = parse_structured(entry.get("text", ""))
             if not parsed or parsed.get("type") != "permission_response":
                 continue
             if parsed.get("request_id") != request_id:
                 continue
-            mark_messages_as_read(agent_name, team_name)
+            mark_message_as_read_by_index(agent_name, team_name, i)
             if parsed.get("subtype") == "success":
                 resp = parsed.get("response") or {}
                 return PermissionResolution(
@@ -370,20 +374,22 @@ def permission_hook_with_bubble(block) -> str | None:
 
     """
     from check_permissions import check_deny_list, check_rules
+    from mcp_integration.names import underlying_tool_name
 
     tool_name = block.name
+    effective_name = underlying_tool_name(tool_name)
     args = block.input
     tool_use_id = getattr(block, "id", "") or generate_request_id()
 
     # Step 1: Bash 黑名单拦截
-    if tool_name == "run_bash":
+    if effective_name == "run_bash":
         reason = check_deny_list(args.get("command", ""))
         if reason:
             print(f"\n\033[31m⛔ {reason}\033[0m")
             return reason
 
     # Step 2: 通用自定义规则检查
-    reason = check_rules(tool_name, args)
+    reason = check_rules(effective_name, args)
     if not reason:
         return None  # 规则通过
 

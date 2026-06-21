@@ -627,8 +627,10 @@ def _exec_create_team(args: dict[str, Any]) -> str:
         return f"Team '{name}' already exists"
     create_team(name)
     ctx = get_agent_context()
-    ctx.team_name = name
-    start_lead_inbox_poller(name)
+    # Keep default lead on its current team; only bind poller on first team setup.
+    if not ctx.team_name:
+        ctx.team_name = name
+        start_lead_inbox_poller(name)
     return f"Created team '{name}' with lead inbox at {TEAMS_DIR / name}/"
 
 
@@ -653,7 +655,9 @@ def _exec_spawn_teammate(args: dict[str, Any]) -> str:
 def _exec_send_message(args: dict[str, Any]) -> str:
     from teammates.context import get_agent_context
     from teammates.mailbox import send_plain_message, send_structured_message
-    from teammates.message_types import create_task_assignment
+    from teammates.message_types import create_plan_approval_request, create_task_assignment
+    from teammates.protocol import ProtocolState, new_request_id, register_request
+    from teammates.team_helpers import get_leader_name
 
     ctx = get_agent_context()
     team_name = ctx.team_name
@@ -678,6 +682,30 @@ def _exec_send_message(args: dict[str, Any]) -> str:
             team_name=team_name,
             color=ctx.color,
         )
+    elif msg_type == "plan_approval":
+        req_id = new_request_id("plan")
+        payload = create_plan_approval_request(
+            from_agent=ctx.agent_name,
+            plan_file_path=args.get("plan_file_path") or "",
+            plan_content=content,
+            request_id=req_id,
+        )
+        leader = get_leader_name(team_name)
+        register_request(ProtocolState(
+            request_id=req_id,
+            type="plan_approval",
+            sender=ctx.agent_name,
+            target=leader,
+            payload=content,
+        ))
+        send_structured_message(
+            from_agent=ctx.agent_name,
+            to_agent=leader,
+            payload=payload,
+            team_name=team_name,
+            color=ctx.color,
+        )
+        return f"Plan submitted to lead (request_id={req_id})"
     else:
         send_plain_message(
             from_agent=ctx.agent_name,
@@ -692,7 +720,7 @@ def _exec_send_message(args: dict[str, Any]) -> str:
 
 def _exec_list_teammates(args: dict[str, Any]) -> str:
     from teammates.context import get_agent_context
-    from teammates.spawn import list_active_teammate_names
+    from teammates.spawn import is_teammate_active, list_active_teammate_names
     from teammates.team_helpers import list_active_teammates, read_team_config
 
     ctx = get_agent_context()
@@ -702,12 +730,67 @@ def _exec_list_teammates(args: dict[str, Any]) -> str:
     config = read_team_config(team_name)
     if not config:
         return f"Team '{team_name}' not found"
-    active = list_active_teammate_names()
     lines = [f"Team: {team_name} (lead: {config.leadAgentId})"]
     for m in list_active_teammates(team_name):
-        status = "running" if m.name in active else "idle/offline"
+        status = "running" if is_teammate_active(team_name, m.name) else "offline"
         lines.append(f"  • {m.name} [{m.color}] ({m.agentType}) — {status}")
     return "\n".join(lines) if len(lines) > 1 else lines[0] + "\n  (no teammates)"
+
+
+def _exec_shutdown_teammate(args: dict[str, Any]) -> str:
+    from teammates.context import get_agent_context
+    from teammates.spawn import request_teammate_shutdown
+
+    ctx = get_agent_context()
+    team_name = (args.get("team_name") or "").strip() or ctx.team_name
+    if not team_name:
+        return "Error: no team context"
+    return request_teammate_shutdown(
+        args["name"],
+        team_name,
+        reason=args.get("reason"),
+    )
+
+
+def _exec_review_plan(args: dict[str, Any]) -> str:
+    from teammates.context import get_agent_context
+    from teammates.mailbox import send_structured_message
+    from teammates.message_types import create_plan_approval_response
+    from teammates.protocol import get_request, match_response
+
+    ctx = get_agent_context()
+    team_name = ctx.team_name
+    if not team_name:
+        return "Error: no team context"
+
+    request_id = args["request_id"]
+    approve = args["approve"]
+    feedback = args.get("feedback") or ""
+
+    state = get_request(request_id)
+    if state is None:
+        return f"Error: unknown plan request_id '{request_id}'"
+    if state.status != "pending":
+        return f"Request {request_id} already {state.status}"
+
+    payload = create_plan_approval_response(
+        request_id=request_id,
+        approved=approve,
+        feedback=feedback or None,
+    )
+    send_structured_message(
+        from_agent=ctx.agent_name,
+        to_agent=state.sender,
+        payload=payload,
+        team_name=team_name,
+    )
+    match_response(
+        response_type="plan_approval_response",
+        request_id=request_id,
+        approved=approve,
+    )
+    verdict = "approved" if approve else "rejected"
+    return f"Plan {verdict} for '{state.sender}' (request_id={request_id})"
 
 
 _CREATE_TEAM_SCHEMA = {
@@ -766,13 +849,20 @@ _SEND_MESSAGE_SCHEMA = {
         "summary": {"type": "string", "description": "Short preview for UI"},
         "message_type": {
             "type": "string",
-            "enum": ["plain", "task_assignment"],
-            "description": "plain for DM; task_assignment for structured task handoff",
+            "enum": ["plain", "task_assignment", "plan_approval"],
+            "description": (
+                "plain for DM; task_assignment for structured handoff; "
+                "plan_approval (teammate→lead) to submit a plan for review"
+            ),
         },
         "task_id": {"type": "string", "description": "Task ID when message_type=task_assignment"},
         "subject": {"type": "string", "description": "Task subject when message_type=task_assignment"},
+        "plan_file_path": {
+            "type": "string",
+            "description": "Optional plan file path when message_type=plan_approval",
+        },
     },
-    "required": ["to", "message", "summary", "message_type", "task_id", "subject"],
+    "required": ["to", "message", "summary", "message_type", "task_id", "subject", "plan_file_path"],
     "additionalProperties": False,
 }
 SEND_MESSAGE_TOOL = build_tool(
@@ -802,8 +892,168 @@ LIST_TEAMMATES_TOOL = build_tool(
     is_read_only=True,
 )
 
+_SHUTDOWN_TEAMMATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "Teammate name to shut down"},
+        "team_name": {"type": "string", "description": "Team name; empty string for current team"},
+        "reason": {"type": "string", "description": "Optional shutdown reason"},
+    },
+    "required": ["name", "team_name", "reason"],
+    "additionalProperties": False,
+}
+SHUTDOWN_TEAMMATE_TOOL = build_tool(
+    name="shutdown_teammate",
+    description=(
+        "Request graceful shutdown of a background teammate (s16 shutdown protocol). "
+        "Teammate replies shutdown_approved before stopping."
+    ),
+    parameters=_SHUTDOWN_TEAMMATE_SCHEMA,
+    execute=_exec_shutdown_teammate,
+    is_read_only=False,
+)
+
+_REVIEW_PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "request_id": {"type": "string", "description": "Plan approval request_id from inbox"},
+        "approve": {"type": "boolean", "description": "True to approve, false to reject"},
+        "feedback": {"type": "string", "description": "Optional feedback for teammate"},
+    },
+    "required": ["request_id", "approve", "feedback"],
+    "additionalProperties": False,
+}
+REVIEW_PLAN_TOOL = build_tool(
+    name="review_plan",
+    description="Approve or reject a teammate plan_approval_request (s16 protocol).",
+    parameters=_REVIEW_PLAN_SCHEMA,
+    execute=_exec_review_plan,
+    is_read_only=False,
+)
+
+# ── MCP 管理工具 ──────────────────────────────────────────────────────────
+
+def _exec_connect_mcp(args: dict[str, Any]) -> str:
+    from mcp_integration.hub import get_mcp_hub
+    from mcp_integration.config import get_server_config
+
+    name = args["name"]
+    hub = get_mcp_hub()
+    if args.get("command"):
+        cmd_args = args.get("args") or []
+        if not isinstance(cmd_args, list):
+            return "Error: 'args' must be an array of strings"
+        env = args.get("env") or {}
+        if env and not isinstance(env, dict):
+            return "Error: 'env' must be an object"
+        return hub.connect_stdio(
+            name,
+            command=args["command"],
+            args=[str(a) for a in cmd_args],
+            env={str(k): str(v) for k, v in env.items()} or None,
+            cwd=args.get("cwd") or None,
+        )
+    if get_server_config(name) is None:
+        return (
+            f"MCP server '{name}' not in .claude/mcp.json and no 'command' provided. "
+            "Pass command/args to connect ad-hoc, or add the server to mcp.json."
+        )
+    return hub.connect_from_config(name)
+
+
+def _exec_disconnect_mcp(args: dict[str, Any]) -> str:
+    from mcp_integration.hub import get_mcp_hub
+    from mcp_integration.names import LOCAL_SERVER_NAME
+
+    name = args["name"]
+    if name == LOCAL_SERVER_NAME:
+        return f"Error: cannot disconnect built-in local server '{LOCAL_SERVER_NAME}'"
+    return get_mcp_hub().disconnect(name)
+
+
+def _exec_list_mcp_servers(args: dict[str, Any]) -> str:
+    from mcp_integration.hub import get_mcp_hub
+
+    hub = get_mcp_hub()
+    servers = hub.list_servers()
+    if not servers:
+        return "No MCP servers connected."
+    lines = ["Connected MCP servers:"]
+    for server in servers:
+        tools = [t.original_tool_name for t in hub.list_tools() if t.server_name == server]
+        lines.append(f"  • {server} ({len(tools)} tools): {', '.join(tools)}")
+    return "\n".join(lines)
+
+
+_CONNECT_MCP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "Server name (key in .claude/mcp.json or alias)"},
+        "command": {
+            "type": "string",
+            "description": "Executable for ad-hoc stdio server; empty string to use mcp.json",
+        },
+        "args": {
+            "type": "array",
+            "description": "Command arguments when using ad-hoc command",
+            "items": {"type": "string"},
+        },
+        "env": {
+            "type": "object",
+            "description": "Optional env vars for ad-hoc connection",
+            "additionalProperties": {"type": "string"},
+        },
+        "cwd": {"type": "string", "description": "Working directory for ad-hoc connection"},
+    },
+    "required": ["name", "command", "args", "env", "cwd"],
+    "additionalProperties": False,
+}
+CONNECT_MCP_TOOL = build_tool(
+    name="connect_mcp",
+    description=(
+        "Connect to an external MCP server via stdio. "
+        "Use name from .claude/mcp.json (leave command empty) or pass command/args directly. "
+        "Discovered tools are prefixed mcp__{server}__{tool}."
+    ),
+    parameters=_CONNECT_MCP_SCHEMA,
+    execute=_exec_connect_mcp,
+    is_read_only=False,
+)
+
+_DISCONNECT_MCP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "description": "MCP server name to disconnect"},
+    },
+    "required": ["name"],
+    "additionalProperties": False,
+}
+DISCONNECT_MCP_TOOL = build_tool(
+    name="disconnect_mcp",
+    description="Disconnect an external MCP server (not the built-in local server).",
+    parameters=_DISCONNECT_MCP_SCHEMA,
+    execute=_exec_disconnect_mcp,
+    is_read_only=False,
+)
+
+_LIST_MCP_SERVERS_SCHEMA = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+    "additionalProperties": False,
+}
+LIST_MCP_SERVERS_TOOL = build_tool(
+    name="list_mcp_servers",
+    description="List connected MCP servers and their discovered tools.",
+    parameters=_LIST_MCP_SERVERS_SCHEMA,
+    execute=_exec_list_mcp_servers,
+    is_read_only=True,
+)
+
 # ── 工具列表 ──────────────────────────────────────────────────────────────
-TOOLS = [
+
+# 通过本地 stdio MCP server 暴露（命名空间 mcp__local__*）
+LOCAL_MCP_TOOLS = [
     TAVILY_SEARCH_TOOL,
     RUN_BASH_TOOL,
     READ_FILE_TOOL,
@@ -816,15 +1066,26 @@ TOOLS = [
     GET_TASK_TOOL,
     CLAIM_TASK_TOOL,
     COMPLETE_TASK_TOOL,
-    SUBAGENT_TASK_TOOL,
     LOAD_SKILL_TOOL,
+]
+
+# 主进程内直接执行（需要 Agent 上下文或 MCP 管理）
+BUILTIN_TOOLS = [
+    SUBAGENT_TASK_TOOL,
     CREATE_TEAM_TOOL,
     SPAWN_TEAMMATE_TOOL,
     SEND_MESSAGE_TOOL,
     LIST_TEAMMATES_TOOL,
+    SHUTDOWN_TEAMMATE_TOOL,
+    REVIEW_PLAN_TOOL,
+    CONNECT_MCP_TOOL,
+    DISCONNECT_MCP_TOOL,
+    LIST_MCP_SERVERS_TOOL,
 ]
 
-# 工具名 → Tool 实例 的查找表
+TOOLS = LOCAL_MCP_TOOLS + BUILTIN_TOOLS
+
+# 工具名 → Tool 实例 的查找表（含 local MCP server 使用的定义）
 TOOL_MAP = {tool.name: tool for tool in TOOLS}
 
 def _get_tool_map() -> dict[str, Tool]:
@@ -832,7 +1093,7 @@ def _get_tool_map() -> dict[str, Tool]:
 
 # ── 对外 API ──────────────────────────────────────────────────────────────
 
-SUBAGENT_EXCLUDED_TOOLS = frozenset({
+SUBAGENT_EXCLUDED_UNDERLYING = frozenset({
     "todo_write",
     "subagent_task",
     "create_task",
@@ -842,7 +1103,68 @@ SUBAGENT_EXCLUDED_TOOLS = frozenset({
     "create_team",
     "send_message",
     "list_teammates",
-})  # 子 agent / 队友不可见的工具
+    "shutdown_teammate",
+    "review_plan",
+    "connect_mcp",
+    "disconnect_mcp",
+    "list_mcp_servers",
+})
+
+TEAMMATE_ALLOWED_UNDERLYING = frozenset({
+    "send_message",
+    "list_tasks",
+    "get_task",
+    "claim_task",
+    "complete_task",
+})
+
+
+def _is_tool_excluded(name: str, excluded_underlying: frozenset[str]) -> bool:
+    from mcp_integration.names import underlying_tool_name
+
+    return underlying_tool_name(name) in excluded_underlying
+
+
+def _build_excluded_names(
+    *,
+    is_subagent: bool,
+    is_teammate: bool,
+) -> frozenset[str]:
+    from mcp_integration.hub import get_mcp_hub
+    from mcp_integration.names import LOCAL_SERVER_NAME, build_prefixed_name
+
+    if is_teammate:
+        allowed = TEAMMATE_ALLOWED_UNDERLYING
+        excluded_underlying = SUBAGENT_EXCLUDED_UNDERLYING - allowed
+    elif is_subagent:
+        excluded_underlying = SUBAGENT_EXCLUDED_UNDERLYING
+        allowed = None
+    else:
+        return frozenset()
+
+    excluded: set[str] = set()
+    for tool in BUILTIN_TOOLS:
+        if _is_tool_excluded(tool.name, excluded_underlying):
+            excluded.add(tool.name)
+    try:
+        hub = get_mcp_hub()
+        for reg in hub.list_tools():
+            if allowed is not None:
+                underlying = reg.original_tool_name
+                if underlying not in allowed:
+                    excluded.add(reg.prefixed_name)
+                continue
+            if reg.server_name != LOCAL_SERVER_NAME and is_subagent:
+                excluded.add(reg.prefixed_name)
+                continue
+            if _is_tool_excluded(reg.prefixed_name, excluded_underlying):
+                excluded.add(reg.prefixed_name)
+    except Exception:
+        for local_tool in LOCAL_MCP_TOOLS:
+            prefixed = build_prefixed_name(LOCAL_SERVER_NAME, local_tool.name)
+            if _is_tool_excluded(prefixed, excluded_underlying):
+                excluded.add(prefixed)
+    return frozenset(excluded)
 
 
 def get_all_tools(isSubagent=False) -> list[dict[str, Any]]:
@@ -851,17 +1173,40 @@ def get_all_tools(isSubagent=False) -> list[dict[str, Any]]:
     client.py 调用此函数获取 tools 参数，传给 chat.completions.create()。
     子 agent 的工具限制在此处统一配置即可，模型看不到的工具不会被请求。
     """
+    from mcp_integration.hub import get_mcp_hub
     from teammates.context import get_agent_context
 
     ctx = get_agent_context()
-    if ctx.is_teammate:
-        # Teammates may DM the lead but cannot spawn nested teammates
-        excluded = SUBAGENT_EXCLUDED_TOOLS - frozenset({"send_message"})
-    elif isSubagent:
-        excluded = SUBAGENT_EXCLUDED_TOOLS
-    else:
-        excluded = frozenset()
-    return [tool.to_openai_schema() for tool in TOOLS if tool.name not in excluded]
+    excluded = _build_excluded_names(
+        is_subagent=isSubagent,
+        is_teammate=ctx.is_teammate,
+    )
+    schemas = get_mcp_hub().to_openai_tools(excluded)
+    for tool in BUILTIN_TOOLS:
+        if tool.name in excluded:
+            continue
+        from mcp_integration.schema_strict import sanitize_openai_tool
+
+        schemas.append(sanitize_openai_tool(tool.name, tool.to_openai_schema()))
+    return schemas
+
+
+def get_tool_parameters(name: str) -> dict[str, Any] | None:
+    """Return JSON Schema for a tool (builtin or MCP-prefixed)."""
+    from mcp_integration.hub import get_mcp_hub
+    from mcp_integration.names import is_mcp_tool
+    from mcp_integration.schema_strict import sanitize_parameters_for_api
+
+    if is_mcp_tool(name):
+        reg = get_mcp_hub().get_tool(name)
+        if reg is None:
+            return None
+        return sanitize_parameters_for_api(reg.prefixed_name, reg.parameters)
+    tool = TOOL_MAP.get(name)
+    if tool is None:
+        return None
+    return sanitize_parameters_for_api(tool.name, tool.parameters)
+
 
 def execute_tool_call(tool_call, args: dict[str, Any] | None = None) -> str:
     """
@@ -870,10 +1215,10 @@ def execute_tool_call(tool_call, args: dict[str, Any] | None = None) -> str:
     PreToolUse / PostToolUse hook 由 agent_loop.py 在调用前后触发。
     若 agent_loop 已解析参数，可传入 args 避免重复解析。
     """
+    from mcp_integration.hub import get_mcp_hub
+    from mcp_integration.names import is_mcp_tool
+
     name = tool_call.function.name
-    tool = TOOL_MAP.get(name)
-    if tool is None:
-        return json.dumps({"status": "error", "message": f"Unknown tool: {name}"})
 
     if args is None:
         try:
@@ -884,8 +1229,24 @@ def execute_tool_call(tool_call, args: dict[str, Any] | None = None) -> str:
         if not isinstance(args, dict):
             return json.dumps({"status": "error", "message": "Arguments must be a JSON object"})
 
+    if is_mcp_tool(name):
+        try:
+            return get_mcp_hub().call_prefixed_tool(name, args)
+        except Exception as e:
+            return json.dumps({"status": "error", "message": f"MCP error: {e}"}, ensure_ascii=False)
+
+    tool = TOOL_MAP.get(name)
+    if tool is None:
+        return json.dumps({"status": "error", "message": f"Unknown tool: {name}"})
+
+    from mcp_integration.schema_strict import adapt_builtin_tool_args
+
+    try:
+        args = adapt_builtin_tool_args(name, args)
+    except ValueError as e:
+        return json.dumps({"status": "error", "message": str(e)})
+
     result = tool.run(args)
-    # bash/file 工具返回 str，tavily 返回 dict，统一处理
     if isinstance(result, str):
         return result
     return json.dumps(result, ensure_ascii=False)

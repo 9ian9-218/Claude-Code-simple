@@ -4,6 +4,7 @@ import threading
 from typing import Any, Callable
 
 from permission_sync import permission_hook_with_bubble as permission_hook
+from console_lock import locked_print
 
 
 def register_hook(event: str, callback: Callable[..., Any]) -> None:
@@ -65,11 +66,12 @@ def validate_args(args: dict[str, Any], schema: dict[str, Any]) -> str | None:
 
 def validate_hook(block) -> str | None:
     """PreToolUse：schema + 路径校验（须在 permission_hook 之前）。"""
-    from tool import _get_tool_map
-    tool = _get_tool_map().get(block.name)
-    if tool is None:
+    from tool import get_tool_parameters
+
+    schema = get_tool_parameters(block.name)
+    if schema is None:
         return f"Unknown tool: {block.name}"
-    return validate_args(block.input, tool.parameters)
+    return validate_args(block.input, schema)
 
 
 def log_hook(block) -> None:
@@ -77,9 +79,9 @@ def log_hook(block) -> None:
 
     ctx = get_agent_context()
     if ctx.is_teammate:
-        print(f"\033[90m[{ctx.agent_name}] {block.name}(...)\033[0m")
+        locked_print(f"\033[90m[{ctx.agent_name}] {block.name}(...)\033[0m")
         return
-    print(f"\033[90m[HOOK] {block.name}(...)\033[0m")
+    locked_print(f"\033[90m[HOOK] {block.name}(...)\033[0m")
 
 
 def large_output_hook(block, output) -> None:

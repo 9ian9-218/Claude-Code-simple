@@ -16,6 +16,7 @@ from background_task import should_run_background, start_background_task
 from messageQueueManager import consume_pending_notifications
 from loop_options import LoopOptions
 from teammates.context import get_agent_context
+from console_lock import locked_print
 
 
 def _build_request_messages(messages: list, memories_content: str) -> list:
@@ -40,7 +41,7 @@ def _inject_pending_notifications(messages: list, *, recipient: str | None = Non
     """消费命令队列中的 pending 通知（对齐 query.ts:1566-1593）。"""
     for notif in consume_pending_notifications(recipient=recipient):
         messages.append({"role": "user", "content": notif})
-        print(f"  \033[32m[inject] task_notification\033[0m")
+        locked_print(f"  \033[32m[inject] task_notification\033[0m")
 
 
 def _inject_teammate_inbox(messages: list) -> None:
@@ -49,7 +50,20 @@ def _inject_teammate_inbox(messages: list) -> None:
 
     for content in consume_pending_injections():
         messages.append({"role": "user", "content": content})
-        print(f"  \033[33m[inject] teammate inbox message\033[0m")
+        locked_print(f"  \033[33m[inject] teammate inbox message\033[0m")
+
+
+def _inject_idle_notifications(messages: list) -> None:
+    """Teammate idle_notification → Lead context."""
+    from teammates.poller import consume_pending_idle_notifications
+    from teammates.protocol import format_idle_notification_injection
+
+    for parsed in consume_pending_idle_notifications():
+        messages.append({
+            "role": "user",
+            "content": format_idle_notification_injection(parsed),
+        })
+        locked_print(f"  \033[33m[inject] teammate idle notification\033[0m")
 
 
 def _process_lead_permissions() -> None:
@@ -82,6 +96,7 @@ def agent_loop(
         if opts.inject_lead_notifications:
             _process_lead_permissions()
             _inject_pending_notifications(messages, recipient=None)
+            _inject_idle_notifications(messages)
             _inject_teammate_inbox(messages)
         elif opts.inject_background_notifications:
             _inject_pending_notifications(messages, recipient=bg_recipient)
@@ -91,7 +106,7 @@ def agent_loop(
         messages[:] = compact.micro_compact(messages)         # L2: old result placeholders
 
         if compact.estimate_messages_tokens(messages) > compact.CONTEXT_LIMIT:
-            print("[auto compact]")
+            locked_print("[auto compact]")
             messages[:] = compact.compact_history(messages)
         request_messages = _build_request_messages(messages, memories_content)
         llm_result = send_messages_with_recovery(
@@ -143,7 +158,9 @@ def agent_loop(
                                 tool_result = execute_tool_call(tool_call, args=args)
                                 trigger_hooks("PostToolUse", block, tool_result)
                 if not opts.quiet_output:
-                    print(f"Tool >\t {tool_call.function.name}({tool_call.function.arguments}) -> {tool_result}")
+                    locked_print(
+                        f"Tool >\t {tool_call.function.name}({tool_call.function.arguments}) -> {tool_result}"
+                    )
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,

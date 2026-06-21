@@ -1,0 +1,24 @@
+# Claude-Code-simple runtime dependencies
+# Install: pip install -r requirements.txt
+# Verified in conda env "agent" (Python 3.12)
+
+# LLM client
+openai==2.40.0
+
+# Environment
+python-dotenv==1.2.2
+
+# Model Context Protocol (local + external MCP servers via stdio)
+mcp==1.27.2
+
+# MCP SDK dependencies
+anyio==4.13.0
+httpx==0.28.1
+httpx-sse>=0.4.0
+jsonschema==4.26.0
+pydantic==2.13.4
+pydantic-settings>=2.0.0
+sse-starlette>=2.0.0
+starlette==1.3.1
+typing-extensions>=4.0.0
+uvicorn==0.49.0

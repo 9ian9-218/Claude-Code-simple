@@ -87,7 +87,10 @@ TEAMS_SECTION = (
     "teammate's task yourself (no write_file/edit_file for work you delegated).\n"
     "- Teammate results arrive as <teammate-message> inbox injections — "
     "summarize them for the user.\n"
-    "- Use send_message to assign follow-up work; use list_teammates to check status.\n"
+    "- Idle teammates auto-claim unowned pending tasks from the board.\n"
+    "- Use send_message for follow-up; shutdown_teammate for graceful shutdown.\n"
+    "- Plan approval: teammate sends message_type=plan_approval; you review_plan.\n"
+    "- Use list_teammates to check running/offline status.\n"
 )
 
 SUBAGENT_IDENTITY = (
@@ -160,6 +163,13 @@ PROMPT_SECTIONS = {
     "task_planning": TASK_PLANNING_SECTION,
     "background_tasks": BACKGROUND_TASKS_SECTION,
     "teams": TEAMS_SECTION,
+    "mcp": (
+        "\n\n## MCP tools\n"
+        "Portable tools (read_file, run_bash, tasks, etc.) are exposed via the "
+        "built-in local MCP server as mcp__local__{tool}.\n"
+        "Use connect_mcp to attach external MCP servers (stdio); their tools appear "
+        "as mcp__{server}__{tool}. Use list_mcp_servers to inspect connections."
+    ),
     "subagent_identity": SUBAGENT_IDENTITY,
     "workspace": f"Working directory: {WORKDIR}",
     "memory_hint": "Relevant memories may be injected into the user message when applicable.",
@@ -179,6 +189,13 @@ def assemble_system_prompt(context: dict, *, isSubagent: bool = False) -> str:
         parts.append(PROMPT_SECTIONS["task_planning"])
         parts.append(PROMPT_SECTIONS["background_tasks"])
         parts.append(PROMPT_SECTIONS["teams"])
+        parts.append(PROMPT_SECTIONS["mcp"])
+        servers = context.get("mcp_servers") or []
+        if servers:
+            count = context.get("mcp_tool_count", 0)
+            parts.append(
+                f"Connected MCP servers: {', '.join(servers)} ({count} tools discovered)."
+            )
     # skill 段：context 里存的是已格式化的 skill section（即 SKILL_CATALOG）
     skill_catalog = context.get("skill_catalog", "")
     if skill_catalog:
@@ -255,14 +272,27 @@ def update_context(context: dict, messages: list) -> dict:
 
     from memory import read_memory_index
     from skill_load import SKILL_CATALOG
-    from tool import TOOL_MAP
+    from tool import BUILTIN_TOOLS
 
     memories = read_memory_index()
+    mcp_servers: list[str] = []
+    mcp_tool_count = 0
+    try:
+        from mcp_integration import get_mcp_hub
+
+        hub = get_mcp_hub()
+        mcp_servers = hub.list_servers()
+        mcp_tool_count = len(hub.list_tools())
+    except Exception:
+        pass
+
     return {
         "skill_catalog": SKILL_CATALOG,
         "workspace": str(WORKDIR),
         "memories": memories,
-        "enabled_tools": list(TOOL_MAP.keys()),
+        "enabled_tools": [t.name for t in BUILTIN_TOOLS],
+        "mcp_servers": mcp_servers,
+        "mcp_tool_count": mcp_tool_count,
     }
 
 

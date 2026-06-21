@@ -117,14 +117,43 @@ def _route_message(entry: dict[str, Any], index: int, team_name: str, lead_name:
         })
         return
 
+    from teammates.protocol import (
+        ProtocolState,
+        format_plan_approval_injection,
+        match_response,
+        register_request,
+    )
+
     with _poller_lock:
         if msg_type == "idle_notification":
             _pending_idle_notifications.append(parsed)
             mark_message_as_read_by_index(lead_name, team_name, index)
+        elif msg_type == "plan_approval_request":
+            req_id = parsed.get("requestId") or parsed.get("request_id", "")
+            from_agent = entry.get("from") or parsed.get("from", "unknown")
+            register_request(ProtocolState(
+                request_id=req_id,
+                type="plan_approval",
+                sender=from_agent,
+                target=lead_name,
+                payload=parsed.get("planContent", ""),
+            ))
+            _pending_injections.append(format_plan_approval_injection(parsed))
+            mark_message_as_read_by_index(lead_name, team_name, index)
         elif msg_type == "shutdown_approved":
+            match_response(
+                response_type="shutdown_approved",
+                request_id=parsed.get("requestId", ""),
+                approved=True,
+            )
             mark_message_as_read_by_index(lead_name, team_name, index)
             print(f"  \033[33m[team] {parsed.get('from')} shutdown approved\033[0m")
         elif msg_type == "shutdown_rejected":
+            match_response(
+                response_type="shutdown_rejected",
+                request_id=parsed.get("requestId", ""),
+                approved=False,
+            )
             mark_message_as_read_by_index(lead_name, team_name, index)
             print(
                 f"  \033[31m[team] {parsed.get('from')} rejected shutdown: "
@@ -132,6 +161,8 @@ def _route_message(entry: dict[str, Any], index: int, team_name: str, lead_name:
             )
         elif msg_type == "teammate_terminated":
             mark_message_as_read_by_index(lead_name, team_name, index)
+            agent = parsed.get("agentName", "unknown")
+            print(f"  \033[33m[team] teammate terminated: {agent}\033[0m")
         else:
             mark_message_as_read_by_index(lead_name, team_name, index)
 

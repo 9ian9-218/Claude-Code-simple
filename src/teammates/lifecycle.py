@@ -63,7 +63,7 @@ def handle_shutdown_request(text: str, agent_name: str, team_name: str) -> bool:
     if not parsed or parsed.get("type") != "shutdown_request":
         return False
 
-    request_id = parsed.get("requestId", "")
+    request_id = parsed.get("requestId") or parsed.get("request_id", "")
     leader = get_leader_name(team_name)
     payload = create_shutdown_approved(request_id=request_id, from_agent=agent_name)
     send_structured_message(
@@ -72,6 +72,7 @@ def handle_shutdown_request(text: str, agent_name: str, team_name: str) -> bool:
         payload=payload,
         team_name=team_name,
     )
+    print(f"  \033[35m[protocol] {agent_name} approved shutdown ({request_id})\033[0m")
     return True
 
 

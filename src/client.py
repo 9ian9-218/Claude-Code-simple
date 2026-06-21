@@ -5,9 +5,9 @@ from openai.types.chat.chat_completion_message_tool_call import (
 )
 from tool import get_all_tools
 import os
-import sys
-import config 
+import config
 
+from console_lock import locked_stdout_write
 from prompt import get_system_prompt, update_context
 
 client = OpenAI(
@@ -77,8 +77,7 @@ def send_messages(messages,max_tokens=8000,isSubagent=False,model=None,
     content_parts = []
     tool_calls_acc = {}
     if not quiet_output:
-        sys.stdout.write("Model >\t ")
-        sys.stdout.flush()
+        locked_stdout_write("Model >\t ")
 
     for chunk in stream:
         choice = chunk.choices[0]
@@ -88,8 +87,7 @@ def send_messages(messages,max_tokens=8000,isSubagent=False,model=None,
         delta = choice.delta
         if delta.content:
             if not quiet_output:
-                sys.stdout.write(delta.content)
-                sys.stdout.flush()
+                locked_stdout_write(delta.content)
             content_parts.append(delta.content)
 
         if delta.tool_calls:
@@ -109,8 +107,7 @@ def send_messages(messages,max_tokens=8000,isSubagent=False,model=None,
                     tool_calls_acc[idx]["function"]["arguments"] += tc.function.arguments
 
     if not quiet_output:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        locked_stdout_write("\n")
 
     tool_calls = None
     if tool_calls_acc:

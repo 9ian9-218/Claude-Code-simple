@@ -116,6 +116,16 @@ def get_next_color(team_name: str) -> str:
     return AGENT_COLORS[len(used) % len(AGENT_COLORS)]
 
 
+def find_teammate_member(team_name: str, name: str) -> TeamMember | None:
+    config = read_team_config(team_name)
+    if config is None:
+        return None
+    for member in config.members:
+        if member.name == name and member.agentId != config.leadAgentId:
+            return member
+    return None
+
+
 def add_teammate(
     team_name: str,
     name: str,
@@ -126,7 +136,8 @@ def add_teammate(
     if config is None:
         raise ValueError(f"Team '{team_name}' not found")
 
-    if any(m.name == name for m in config.members):
+    existing = find_teammate_member(team_name, name)
+    if existing is not None:
         raise ValueError(f"Teammate '{name}' already exists in team '{team_name}'")
 
     member = TeamMember(
@@ -139,6 +150,41 @@ def add_teammate(
     config.members.append(member)
     write_team_config(config)
     return member
+
+
+def reactivate_teammate(
+    team_name: str,
+    name: str,
+    *,
+    agent_type: str | None = None,
+    color: str | None = None,
+) -> TeamMember:
+    """Re-enable an offline teammate for re-spawn (s16/s17 lifecycle)."""
+    config = read_team_config(team_name)
+    if config is None:
+        raise ValueError(f"Team '{team_name}' not found")
+    for member in config.members:
+        if member.name == name and member.agentId != config.leadAgentId:
+            member.isActive = True
+            if agent_type:
+                member.agentType = agent_type
+            if color:
+                member.color = color
+            write_team_config(config)
+            return member
+    raise ValueError(f"Teammate '{name}' not found in team '{team_name}'")
+
+
+def ensure_teammate_for_spawn(
+    team_name: str,
+    name: str,
+    agent_type: str = "general-purpose",
+) -> TeamMember:
+    """Register or reactivate a teammate before spawning thread."""
+    existing = find_teammate_member(team_name, name)
+    if existing is None:
+        return add_teammate(team_name, name, agent_type=agent_type)
+    return reactivate_teammate(team_name, name, agent_type=agent_type)
 
 
 def deactivate_teammate(team_name: str, name: str) -> None:

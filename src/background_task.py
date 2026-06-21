@@ -50,7 +50,9 @@ def is_slow_operation(tool_name: str, tool_input: dict) -> bool:
        以及常见的“慢命令”组合（docker build、pip install、npm install 等）。
     4. 只要命令字符串包含任何一个慢关键词，就认定为慢操作，返回 True。
     """
-    if tool_name != "run_bash":
+    from mcp_integration.names import underlying_tool_name
+
+    if underlying_tool_name(tool_name) != "run_bash":
         return False
     cmd = tool_input.get("command", "").lower()
     slow_keywords = [
@@ -173,7 +175,9 @@ _COMPLETION_OUTPUT_PREVIEW = 2000
 
 
 def _build_completion_summary(tool_name: str, command: str, exit_code: int) -> str:
-    if tool_name == "run_bash" and command:
+    from mcp_integration.names import underlying_tool_name
+
+    if underlying_tool_name(tool_name) == "run_bash" and command:
         return f'Background command "{command}" completed (exit code {exit_code})'
     return f"Background {tool_name} completed (exit code {exit_code})"
 
@@ -221,7 +225,9 @@ def start_background_task(tool_call, args: dict) -> str:
     recipient = ctx.agent_name if ctx.is_teammate else None
 
     def worker():
-        if tool_name == "run_bash":
+        from mcp_integration.names import underlying_tool_name
+
+        if underlying_tool_name(tool_name) == "run_bash":
             output, exit_code = _run_bash_with_exit_code(
                 command, bg_id=bg_id, tool_use_id=tool_call.id, recipient=recipient,
             )

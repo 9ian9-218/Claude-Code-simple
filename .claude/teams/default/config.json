@@ -8,7 +8,7 @@
       "agentType": "lead",
       "color": "white",
       "isActive": true,
-      "joinedAt": "2026-06-04T10:53:24.641672+00:00",
+      "joinedAt": "2026-06-07T14:02:32.359153+00:00",
       "model": null
     },
     {
@@ -16,26 +16,17 @@
       "name": "alice",
       "agentType": "general-purpose",
       "color": "blue",
-      "isActive": true,
-      "joinedAt": "2026-06-04T13:12:46.460498+00:00",
+      "isActive": false,
+      "joinedAt": "2026-06-07T14:03:30.603650+00:00",
       "model": null
     },
     {
-      "agentId": "Alice@default",
-      "name": "Alice",
+      "agentId": "bob@default",
+      "name": "bob",
       "agentType": "general-purpose",
       "color": "green",
-      "isActive": true,
-      "joinedAt": "2026-06-04T13:19:48.144527+00:00",
-      "model": null
-    },
-    {
-      "agentId": "Bob@default",
-      "name": "Bob",
-      "agentType": "general-purpose",
-      "color": "yellow",
-      "isActive": true,
-      "joinedAt": "2026-06-04T13:21:45.918930+00:00",
+      "isActive": false,
+      "joinedAt": "2026-06-07T14:03:30.612422+00:00",
       "model": null
     }
   ]
