@@ -5,6 +5,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+from config import get_workdir
 from hook import trigger_hooks
 from messageQueueManager import enqueue_pending_notification
 from tool import execute_tool_call
@@ -104,7 +105,7 @@ def _run_bash_with_exit_code(
     """Execute bash with streaming output and a stall watchdog."""
     try:
         proc = subprocess.Popen(
-            command, shell=True, cwd=os.getcwd(),
+            command, shell=True, cwd=get_workdir(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True,
         )

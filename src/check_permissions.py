@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from config import WORKDIR
+from config import get_workdir
 
 # Gate 1: 硬拒绝黑名单（run_bash 专用，直接返回错误）
 # Gate 2: 规则匹配（按工具名 + 条件，命中则进入 Gate 3）
@@ -16,7 +16,7 @@ DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev
 PERMISSION_RULES = [
     {
         "tools": ["write_file", "edit_file"],
-        "check": lambda args: not (WORKDIR / args.get("path", "")).resolve().is_relative_to(WORKDIR),
+        "check": lambda args: not (get_workdir() / args.get("path", "")).resolve().is_relative_to(get_workdir()),
         "message": "Writing outside workspace",
     },
     {

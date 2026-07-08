@@ -1,3 +1,0 @@
-- [agent-names-alice-bob](agent-names-alice-bob.md) — Agents named Alice and Bob are spawned
-- [prefer-concise-answers](prefer-concise-answers.md) — User prefers concise answers over long complex ones.
-- [tasks-block-relationships](tasks-block-relationships.md) — Tasks must have block relationships between them

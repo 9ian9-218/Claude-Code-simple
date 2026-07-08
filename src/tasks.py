@@ -4,9 +4,10 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from config import TASKS_DIR
+from config import TASKS_DIR, set_worktree_override
 from console_lock import locked_print
 from file_lock import file_lock
+from worktree import create_task_worktree, remove_task_worktree
 """
 CC 任务系统字段：(本项目包括了其中 7 个字段)
 字段	类型	用途
@@ -329,7 +330,7 @@ def _agent_busy_task(tasks: list[Task], owner: str) -> Task | None:
 
 
 def _execute_task_claim(task_id: str, owner: str) -> str:
-    """Per-task file lock: read-check-write → in_progress (CC claimTask body)."""
+    """Per-task file lock: read-check-write → in_progress → create worktree."""
     path = _task_path(task_id)
     if not path.exists():
         raise FileNotFoundError(task_id)
@@ -352,6 +353,12 @@ def _execute_task_claim(task_id: str, owner: str) -> str:
         _write_task_file(path, task)
         subject = task.subject
         task_ref = task.id
+
+    # Create git worktree for isolation (non-fatal on failure)
+    wt = create_task_worktree(task_id)
+    if wt is not None:
+        set_worktree_override(wt)
+        locked_print(f"  \033[36m[worktree] switched to {wt}\033[0m")
 
     locked_print(f"  \033[36m[claim] {subject} → in_progress (owner: {owner})\033[0m")
     return f"Claimed {task_ref} ({subject})"
@@ -452,6 +459,10 @@ def complete_task(task_id: str, *, owner: str | None = None) -> str:
         subject = task.subject
         task_ref = task.id
         block_ids = list(task.blocks)
+
+    # Remove worktree (best-effort) and restore working directory
+    remove_task_worktree(task_id)
+    set_worktree_override(None)
 
     unblocked: list[str] = []
     for down_id in block_ids:

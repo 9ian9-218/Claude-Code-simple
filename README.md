@@ -20,7 +20,7 @@
 | Agent Teams | s15 | ✅ | Lead + Teammate，JSONL 邮箱 + 权限同步 |
 | Team Protocols | s16 | 🚧 | 结构化 request_id 协议（plan 审批等） |
 | Autonomous Agents | s17 | 🚧 | Idle 轮询 + 任务看板自动 claim |
-| Worktree Isolation | s18 | 🚧 | Git Worktree  per-task 隔离 |
+| Worktree Isolation | s18 | ✅ | Git Worktree per-task 隔离 |
 | Cron Scheduler | s14 | 🚧 | 持久化定时任务 + 队列处理器 |
 | MCP Tools | s19 | 🚧 | 外部 MCP Server 发现与命名空间归一化 |
 | Comprehensive Agent | s20 | 🚧 | 全模块统一编排 |
@@ -129,6 +129,35 @@ python main.py
 
 Teammate 和 Subagent 的工具集自动受限（不可 spawn 嵌套 Teammate 等）。
 
+## Worktree 隔离
+
+当 Agent **claim** 一个 task 时，自动在 `.claude/worktrees/<task_id>/` 创建 git worktree，
+并切换到该 worktree 的分支 `claude/task-<task_id>`。
+之后所有文件读写、bash 操作都局限在 worktree 内，与原工作区隔离。
+
+- **claim** → 创建 worktree + 切换工作目录
+- **complete** → 删除 worktree + 恢复原工作目录
+- 如果 git 不可用或工作区不干净，worktree 创建静默跳过，不影响 task 流程
+- worktree 目录已被 `.gitignore` 排除，不会提交到仓库
+
+### 使用示例
+
+```bash
+# Agent 创建并认领任务后自动进入 worktree
+User >  create_task subject="重构 auth 模块"
+# → Created task_1: 重构 auth 模块
+User >  claim_task task_id="task_1"
+# → [worktree] created at .claude/worktrees/task_1/ (branch: claude/task-task_1)
+# → [worktree] switched to .../.claude/worktrees/task_1
+# → [claim] 重构 auth 模块 → in_progress (owner: agent)
+
+# 此时所有文件操作都在 worktree 内进行，不影响主仓库
+User >  complete_task task_id="task_1"
+# → [worktree] removing worktree task_1
+# → [complete] 重构 auth 模块 ✓
+# → 回到主仓库工作目录
+```
+
 ## 项目结构
 
 ```
@@ -143,6 +172,7 @@ Claude-Code-simple/
 │   ├── compact.py          # 四层上下文压缩
 │   ├── memory.py           # 长期记忆
 │   ├── tasks.py            # 任务看板
+│   ├── worktree.py         # Git Worktree 隔离（s18）
 │   ├── background_task.py  # 后台任务线程
 │   ├── messageQueueManager.py  # 异步通知队列
 │   ├── error_recovery.py   # LLM 错误恢复
@@ -161,7 +191,8 @@ Claude-Code-simple/
 │   ├── teams/              # 多 Agent 团队配置与邮箱
 │   ├── memory/             # 长期记忆
 │   ├── tasks/              # 任务看板
-│   └── skills/             # 可加载的 Skill 定义
+│   ├── skills/             # 可加载的 Skill 定义
+│   └── worktrees/          # 任务隔离 Git Worktree（自动管理）
 └── .env                    # 环境变量（不提交）
 ```
 

@@ -1,3 +1,20 @@
 .env
+
+# .claude 运行时数据（测试/用户会话产生，非 agent 核心）
+.claude/memory/
+.claude/tasks/
+.claude/teams/
+.claude/worktrees/
+.claude/settings.local.json
+
 .TEAMMATES_UPGRADE.md
 MCP_INTEGRATION.md
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/

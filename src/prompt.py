@@ -26,14 +26,14 @@ mcp_instructions 是唯一的易失性 section（通过 DANGEROUS_uncachedSystem
 
 import json
 
-from config import MEMORY_DIR, TASKS_DIR, WORKDIR
+from config import MEMORY_DIR, TASKS_DIR, get_workdir
 
 # =============================================================================
 # System prompt — 主 agent
 # =============================================================================
 
 AGENT_IDENTITY = (
-    f"You are a coding agent at {WORKDIR}. "
+    "You are a coding agent at {workspace}. "
     "For isolated deep dives, use subagent_task. "
     "For the current turn's short checklist, use todo_write."
 )
@@ -94,7 +94,7 @@ TEAMS_SECTION = (
 )
 
 SUBAGENT_IDENTITY = (
-    f"You are a coding agent at {WORKDIR}. "
+    "You are a coding agent at {workspace}. "
     "Complete the task you were given, then return a concise summary. "
     "Do not delegate further."
 )
@@ -138,7 +138,7 @@ def build_main_system(skill_catalog: str, memory_index: str) -> str:
     return assemble_system_prompt({
         "skill_catalog": skill_catalog,
         "memories": memory_index,
-        "workspace": str(WORKDIR),
+        "workspace": str(get_workdir()),
         "enabled_tools": [],
     })
 
@@ -148,7 +148,7 @@ def build_subagent_system(skill_catalog: str) -> str:
     return assemble_system_prompt({
         "skill_catalog": skill_catalog,
         "memories": "",
-        "workspace": str(WORKDIR),
+        "workspace": str(get_workdir()),
         "enabled_tools": [],
     }, isSubagent=True)
 
@@ -171,7 +171,7 @@ PROMPT_SECTIONS = {
         "as mcp__{server}__{tool}. Use list_mcp_servers to inspect connections."
     ),
     "subagent_identity": SUBAGENT_IDENTITY,
-    "workspace": f"Working directory: {WORKDIR}",
+    "workspace": "Working directory: {workspace}",
     "memory_hint": "Relevant memories may be injected into the user message when applicable.",
 }
 
@@ -182,8 +182,10 @@ def assemble_system_prompt(context: dict, *, isSubagent: bool = False) -> str:
     主 agent: identity + task_planning + skill_catalog + memory_section
     子 agent: subagent_identity + skill_catalog
     """
+    workspace = context.get("workspace", str(get_workdir()))
     # 身份段：主/子 agent 使用不同模板
-    identity = PROMPT_SECTIONS["subagent_identity"] if isSubagent else PROMPT_SECTIONS["identity"]
+    identity_template = PROMPT_SECTIONS["subagent_identity"] if isSubagent else PROMPT_SECTIONS["identity"]
+    identity = identity_template.format(workspace=workspace)
     parts = [identity]
     if not isSubagent:
         parts.append(PROMPT_SECTIONS["task_planning"])
@@ -288,7 +290,7 @@ def update_context(context: dict, messages: list) -> dict:
 
     return {
         "skill_catalog": SKILL_CATALOG,
-        "workspace": str(WORKDIR),
+        "workspace": str(get_workdir()),
         "memories": memories,
         "enabled_tools": [t.name for t in BUILTIN_TOOLS],
         "mcp_servers": mcp_servers,

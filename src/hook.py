@@ -8,7 +8,7 @@ from console_lock import locked_print
 
 
 def register_hook(event: str, callback: Callable[..., Any]) -> None:
-    HOOKS[event].append(callback)
+    HOOKS.setdefault(event, []).append(callback)
 
 def trigger_hooks(event: str, *args: Any) -> Any:
     """依次执行 hook；任一 hook 返回非 None 则短路并返回该值。"""
@@ -20,9 +20,9 @@ def trigger_hooks(event: str, *args: Any) -> Any:
 
 
 # ── UserPromptSubmit ──────────────────────────────────────────────────────
-from config import WORKDIR
+from config import get_workdir
 def context_inject_hook(query: str) -> None:
-    print(f"\033[90m[HOOK] UserPromptSubmit: working in {WORKDIR}\033[0m")
+    print(f"\033[90m[HOOK] UserPromptSubmit: working in {get_workdir()}\033[0m")
 
 
 # ── PreToolUse / PostToolUse ──────────────────────────────────────────────

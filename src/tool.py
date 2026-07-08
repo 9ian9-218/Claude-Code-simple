@@ -100,12 +100,13 @@ def build_tool(
         is_read_only=is_read_only,
     )
 
-from config import MEMORY_DIR, TEAMS_DIR, WORKDIR
+from config import MEMORY_DIR, TEAMS_DIR, WORKDIR, get_workdir
 # ── 路径校验工具 ──────────────────────────────────────────────────────────
 def _check_path(p: str) -> str | None:
-    """检查路径是否在 WORKDIR 内，返回错误信息或 None。"""
-    path = (WORKDIR / p).resolve()
-    if not path.is_relative_to(WORKDIR):
+    """检查路径是否在工作区内，返回错误信息或 None。"""
+    wd = get_workdir()
+    path = (wd / p).resolve()
+    if not path.is_relative_to(wd):
         return f"Path escapes workspace: {p}"
     return None
 
@@ -114,7 +115,7 @@ def safe_path(p: str) -> Path:
     err = _check_path(p)
     if err:
         raise ValueError(err)
-    return (WORKDIR / p).resolve()
+    return (get_workdir() / p).resolve()
 
 # ── 各工具的 execute 函数、JSON Schema 定义及 Tool 实例 ─────────────────────────────────────────────
 
@@ -187,7 +188,7 @@ def _exec_run_bash(args: dict[str, Any]) -> str:
     command = args["command"]
     try:
         r = subprocess.run(
-            command, shell=True, cwd=os.getcwd(),
+            command, shell=True, cwd=get_workdir(),
             capture_output=True, text=True, timeout=120,
         )
         out = (r.stdout + r.stderr).strip()
@@ -320,11 +321,11 @@ EDIT_FILE_TOOL = build_tool(
 
 #glob
 def _exec_glob(args: dict[str, Any]) -> str:
-    """按 glob 模式匹配 WORKDIR 下的文件，返回换行分隔的路径列表。"""
+    """按 glob 模式匹配工作区下的文件，返回换行分隔的路径列表。"""
     pattern = args["pattern"]
     try:
         recursive = "**" in pattern
-        return "\n".join(glob_module.glob(pattern, root_dir=WORKDIR, recursive=recursive))
+        return "\n".join(glob_module.glob(pattern, root_dir=get_workdir(), recursive=recursive))
     except Exception as e:
         return f"Error: {e}"
 
