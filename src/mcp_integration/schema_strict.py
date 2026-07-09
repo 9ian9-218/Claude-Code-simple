@@ -9,6 +9,12 @@ import copy
 import json
 from typing import Any
 
+from config import TOOL_STRICT
+
+
+def is_tool_strict_enabled() -> bool:
+    return TOOL_STRICT
+
 _CONNECT_MCP_ENV_JSON = {
     "type": "string",
     "description": (
@@ -65,6 +71,8 @@ def sanitize_connect_mcp_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
 
 def sanitize_parameters_for_api(tool_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    if not is_tool_strict_enabled():
+        return parameters
     if tool_name == "connect_mcp":
         return sanitize_connect_mcp_schema(parameters)
     return sanitize_schema_for_strict(parameters)
@@ -75,6 +83,10 @@ def sanitize_openai_tool(tool_name: str, openai_tool: dict[str, Any]) -> dict[st
     fn = out.get("function")
     if not isinstance(fn, dict):
         return out
+    if not is_tool_strict_enabled():
+        fn.pop("strict", None)
+        return out
+    fn["strict"] = True
     params = fn.get("parameters")
     if isinstance(params, dict):
         fn["parameters"] = sanitize_parameters_for_api(tool_name, params)

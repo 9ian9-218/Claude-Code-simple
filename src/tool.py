@@ -72,7 +72,6 @@ class Tool:
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "strict": True,
                 "parameters": self.parameters,
             },
         }

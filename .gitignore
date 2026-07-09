@@ -1,20 +1,47 @@
+# ── Secrets / env ──
 .env
+.env.*
+!.env.example
 
-# .claude 运行时数据（测试/用户会话产生，非 agent 核心）
+# ── .claude 运行时与用户本地数据 ──
 .claude/memory/
 .claude/tasks/
 .claude/teams/
 .claude/worktrees/
 .claude/settings.local.json
+.claude/mcp.json
 
-.TEAMMATES_UPGRADE.md
-MCP_INTEGRATION.md
+# 用户自行添加的 skill（仓库内置 skill 已被 git 跟踪，修改仍会显示）
+.claude/skills/*/
 
-# Python cache
+# ── Python cache / build ──
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+*.so
+.Python
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 *.egg-info/
 dist/
 build/
+*.egg
+
+# ── Virtual env ──
+.venv/
+venv/
+env/
+
+# ── IDE / OS ──
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ── Logs ──
+*.log

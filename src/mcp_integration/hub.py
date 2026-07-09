@@ -268,7 +268,6 @@ class MCPHub:
                         "function": {
                             "name": reg.prefixed_name,
                             "description": reg.description,
-                            "strict": True,
                             "parameters": reg.parameters,
                         },
                     },

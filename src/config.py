@@ -1,5 +1,6 @@
 """Shared runtime config"""
 
+import os
 import threading
 from pathlib import Path
 
@@ -43,3 +44,14 @@ def ensure_claude_dirs() -> None:
 ensure_claude_dirs()
 
 load_dotenv(PROJECT_ROOT / ".env")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Tool calling strict mode (OPENAI_TOOL_STRICT=false for APIs that reject the strict field)
+TOOL_STRICT = _env_bool("OPENAI_TOOL_STRICT", True)
