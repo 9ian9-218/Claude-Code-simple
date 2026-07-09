@@ -19,7 +19,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.types import Tool as McpTool
 
-from config import PROJECT_ROOT
+from config import PROJECT_ROOT, get_workdir
 from mcp_integration.config import MCPServerConfig, get_server_config
 from mcp_integration.names import (
     LOCAL_SERVER_NAME,
@@ -123,7 +123,7 @@ class MCPHub:
             command=command,
             args=args,
             env=env,
-            cwd=cwd or str(PROJECT_ROOT),
+            cwd=cwd or str(get_workdir()),
         )
         read, write = await stack.enter_async_context(stdio_client(params))
         session = await stack.enter_async_context(ClientSession(read, write))
@@ -223,7 +223,7 @@ class MCPHub:
             LOCAL_SERVER_NAME,
             command=sys.executable,
             args=[str(script)],
-            cwd=str(PROJECT_ROOT),
+            cwd=str(get_workdir()),
         )
 
     def disconnect(self, name: str) -> str:

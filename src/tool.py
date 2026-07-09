@@ -103,7 +103,7 @@ from config import MEMORY_DIR, TEAMS_DIR, WORKDIR, get_workdir
 # ── 路径校验工具 ──────────────────────────────────────────────────────────
 def _check_path(p: str) -> str | None:
     """检查路径是否在工作区内，返回错误信息或 None。"""
-    wd = get_workdir()
+    wd = get_workdir().resolve()
     path = (wd / p).resolve()
     if not path.is_relative_to(wd):
         return f"Path escapes workspace: {p}"
@@ -111,10 +111,11 @@ def _check_path(p: str) -> str | None:
 
 def safe_path(p: str) -> Path:
     """解析并返回工作区内的安全路径，供 execute 阶段使用。"""
-    err = _check_path(p)
-    if err:
-        raise ValueError(err)
-    return (get_workdir() / p).resolve()
+    wd = get_workdir().resolve()
+    path = (wd / p).resolve()
+    if not path.is_relative_to(wd):
+        raise ValueError(f"Path escapes workspace: {p}")
+    return path
 
 # ── 各工具的 execute 函数、JSON Schema 定义及 Tool 实例 ─────────────────────────────────────────────
 
@@ -349,9 +350,30 @@ GLOB_TOOL = build_tool(
 
 #todo_list_write
 CURRENT_TODOS: list[dict] = []
+
+def _sync_todo_from_tasks() -> None:
+    """Auto-sync CURRENT_TODOS from persisted tasks and print a visual board."""
+    from tasks import list_tasks
+    tasks = list_tasks()
+    if not tasks:
+        return
+    global CURRENT_TODOS
+    CURRENT_TODOS = [
+        {"content": f"[{t.id}] {t.subject}", "status": t.status}
+        for t in tasks
+    ]
+    _format_todo_board()
+
 def _exec_todo_write(args: dict[str, Any]) -> str:
     global CURRENT_TODOS
+    # If called with empty/placeholder todos, refresh from persisted tasks
     todos = args["todos"]
+    if not todos or (len(todos) == 1 and not todos[0].get("content")):
+        _sync_todo_from_tasks()
+        if CURRENT_TODOS:
+            return _format_todo_board()
+        return "No tasks yet."
+
     # validate required fields
     for i, t in enumerate(todos):
         if "content" not in t or "status" not in t:
@@ -359,12 +381,18 @@ def _exec_todo_write(args: dict[str, Any]) -> str:
         if t["status"] not in ("pending", "in_progress", "completed"):
             return f"Error: todos[{i}] has invalid status '{t['status']}'"
     CURRENT_TODOS = todos
-    lines = ["\n\033[33m## Current Tasks\033[0m"]
+    return _format_todo_board(updated=True)
+
+def _format_todo_board(*, updated: bool = False) -> str:
+    lines = ["\n\033[33m## Tasks Progress\033[0m"]
     for t in CURRENT_TODOS:
         icon = {"pending": " ", "in_progress": "\033[36m▸\033[0m", "completed": "\033[32m✓\033[0m"}[t["status"]]
         lines.append(f"  [{icon}] {t['content']}")
-    print("\n".join(lines))
-    return f"Updated {len(CURRENT_TODOS)} tasks"
+    board = "\n".join(lines)
+    if updated:
+        return board
+    print(board)
+    return f"Showing {len(CURRENT_TODOS)} tasks"
 
 _TODO_WRITE_SCHEMA = {
     "type": "object",
@@ -396,8 +424,11 @@ _TODO_WRITE_SCHEMA = {
 TODO_WRITE_TOOL = build_tool(
     name="todo_write",
     description=(
-        "Session checklist for micro-steps within the *current* persisted task only. "
-        "For large multi-step goals, plan first with create_task/list_tasks, not todo_write alone."
+        "Visual progress board for the current session's persisted tasks. "
+        "Auto-synced with create_task/claim_task/complete_task — "
+        "read it to see task status at a glance without calling list_tasks. "
+        "Use todo_write to manually refresh the display or add micro-items "
+        "for the current step."
     ),
     parameters=_TODO_WRITE_SCHEMA,
     execute=_exec_todo_write,
@@ -442,8 +473,9 @@ _TASK_SCHEMA = {
 SUBAGENT_TASK_TOOL = build_tool(
     name="subagent_task",
     description=(
-        "Launch a subagent for an isolated sub-problem. "
-        "Not for the main plan-and-resolve workflow (use create_task/claim_task there)."
+        "Launch a subagent for deep research, a large self-contained subtask, "
+        "or one of multiple independent work items. "
+        "Subagents return a text summary when done."
     ),
     parameters=_TASK_SCHEMA,
     execute=_spawn_subagent,
@@ -484,11 +516,13 @@ from tasks import (
 
 def _exec_create_task(args: dict[str, Any]) -> str:
     blocked = args["blockedBy"]
-    return run_create_task(
+    result = run_create_task(
         args["subject"],
         args["description"],
         blocked if blocked else None,
     )
+    _sync_todo_from_tasks()
+    return result
 
 
 def _exec_list_tasks(args: dict[str, Any]) -> str:
@@ -500,11 +534,15 @@ def _exec_get_task(args: dict[str, Any]) -> str:
 
 
 def _exec_claim_task(args: dict[str, Any]) -> str:
-    return run_claim_task(args["task_id"])
+    result = run_claim_task(args["task_id"])
+    _sync_todo_from_tasks()
+    return result
 
 
 def _exec_complete_task(args: dict[str, Any]) -> str:
-    return run_complete_task(args["task_id"])
+    result = run_complete_task(args["task_id"])
+    _sync_todo_from_tasks()
+    return result
 
 
 _CREATE_TASK_SCHEMA = {
@@ -1052,6 +1090,34 @@ LIST_MCP_SERVERS_TOOL = build_tool(
 
 # ── 工具列表 ──────────────────────────────────────────────────────────────
 
+#kill_bg_task
+def _exec_kill_bg_task(args: dict[str, Any]) -> str:
+    from background_task import kill_bg_task
+    return kill_bg_task(args["task_id"])
+
+_KILL_BG_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "task_id": {
+            "type": "string",
+            "description": "Background task ID (e.g. 'bg_0001') returned when the task was launched",
+        },
+    },
+    "required": ["task_id"],
+    "additionalProperties": False,
+}
+KILL_BG_TOOL = build_tool(
+    name="kill_bg_task",
+    description=(
+        "Kill a running background task by its task_id. "
+        "Use when a background command is stalled on an interactive prompt "
+        "or has been running too long. Only bash commands can be killed."
+    ),
+    parameters=_KILL_BG_SCHEMA,
+    execute=_exec_kill_bg_task,
+    is_read_only=False,
+)
+
 # 通过本地 stdio MCP server 暴露（命名空间 mcp__local__*）
 LOCAL_MCP_TOOLS = [
     TAVILY_SEARCH_TOOL,
@@ -1081,6 +1147,7 @@ BUILTIN_TOOLS = [
     CONNECT_MCP_TOOL,
     DISCONNECT_MCP_TOOL,
     LIST_MCP_SERVERS_TOOL,
+    KILL_BG_TOOL,
 ]
 
 TOOLS = LOCAL_MCP_TOOLS + BUILTIN_TOOLS
@@ -1108,6 +1175,7 @@ SUBAGENT_EXCLUDED_UNDERLYING = frozenset({
     "connect_mcp",
     "disconnect_mcp",
     "list_mcp_servers",
+    "kill_bg_task",
 })
 
 TEAMMATE_ALLOWED_UNDERLYING = frozenset({

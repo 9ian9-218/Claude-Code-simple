@@ -16,7 +16,7 @@ DENY_LIST = ["rm -rf /", "sudo", "shutdown", "reboot", "mkfs", "dd if=", "> /dev
 PERMISSION_RULES = [
     {
         "tools": ["write_file", "edit_file"],
-        "check": lambda args: not (get_workdir() / args.get("path", "")).resolve().is_relative_to(get_workdir()),
+        "check": lambda args: not (get_workdir().resolve() / args.get("path", "")).resolve().is_relative_to(get_workdir().resolve()),
         "message": "Writing outside workspace",
     },
     {

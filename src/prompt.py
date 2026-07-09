@@ -34,7 +34,8 @@ from config import MEMORY_DIR, TASKS_DIR, get_workdir
 
 AGENT_IDENTITY = (
     "You are a coding agent at {workspace}. "
-    "For isolated deep dives, use subagent_task. "
+    "Use subagent_task for deep research, large subtasks, or multiple "
+    "independent work items that can run concurrently. "
     "For the current turn's short checklist, use todo_write."
 )
 
@@ -57,6 +58,8 @@ TASK_PLANNING_SECTION = (
     "4. Repeat until all tasks are completed or the user stops you.\n\n"
     "Rules:\n"
     "- Do not claim multiple persisted tasks in parallel.\n"
+    "- Use subagent_task for deep dives, large self-contained subtasks,\n"
+    "  or multiple independent work items that can run concurrently.\n"
     "- Do not complete_task without having claimed it first.\n"
     "- Add new create_task entries only if the plan truly changes; prefer finishing "
     "the existing plan first.\n"
@@ -74,13 +77,24 @@ BACKGROUND_TASKS_SECTION = (
     "- On completion: <status>completed</status> plus an Output section — read it and "
     "continue the task.\n"
     "- On stall (interactive prompt): a statusless notification with last output — "
-    "kill the task and re-run with non-interactive flags or piped input.\n"
+    "use kill_bg_task to terminate it, then re-run with non-interactive flags or piped input.\n"
+    "- On prolonged stall (no output for 15s, running for 300s+): a statusless notification — "
+    "use kill_bg_task if the command is stuck.\n"
 )
 
 TEAMS_SECTION = (
     "\n\n## Agent teams (Lead + Teammates)\n"
-    "A default team is already initialized at startup — do NOT call create_team unless "
-    "the user explicitly asks for a separate team name.\n"
+    "Use teammates for large projects needing multiple skill areas, "
+    "many parallel tasks, or work that benefits from role-specific focus.\n\n"
+    "**When to use:** large project generation, multi-aspect implementation "
+    "(frontend + backend + infra), or when you have more tasks than a single "
+    "thread can handle efficiently.\n\n"
+    "**Priority: subagent first.** If a subtask is self-contained and a "
+    "subagent can handle it efficiently, use subagent_task. Only escalate to "
+    "spawn_teammate when the scope is large enough that a dedicated long-running "
+    "agent with role-specific context is genuinely faster.\n\n"
+    "A default team is already initialized at startup — do NOT call create_team "
+    "unless the user explicitly asks for a separate team name.\n"
     "- Delegate parallel work with spawn_teammate(name, role, prompt, team_name=\"\", ...).\n"
     "- Pass team_name as empty string to use the current team.\n"
     "- After spawning: tell the user the teammate is working; do NOT implement the "
@@ -324,7 +338,9 @@ def format_snipped_user_message(count: int) -> str:
 
 SELECT_MEMORIES_TEMPLATE = """\
 Given the recent conversation and the memory catalog below, \
-select the indices of memories that are clearly relevant. \
+select ONLY the indices of memories that are directly and critically relevant \
+to the current task. A memory is worth including only if ignoring it would \
+cause a materially wrong answer. \
 Return ONLY a JSON array of integers, e.g. [0, 3]. \
 If none are relevant, return [].
 
@@ -336,14 +352,26 @@ Memory catalog:
 
 
 EXTRACT_MEMORIES_TEMPLATE = """\
-Extract user preferences, constraints, or project facts from this dialogue.
+Extract memories ONLY if they meet ANY of these criteria:
+1. Established facts or important conclusions about the project or user
+2. Overall project goals, architecture decisions, or strategic direction
+3. Information that will significantly impact future work across multiple sessions
+4. Repeated user instructions or preferences that appear more than once
+5. User explicitly asked to remember something
+
+Do NOT extract:
+- Transient questions about file locations, simple clarifications, or one-off status checks
+- Minor preferences stated once without emphasis
+- Anything the user is likely to figure out again from context in the next turn
+
+If nothing meets the criteria, return [].
+
 Return a JSON array. Each item: {{name, type, description, body}}.
-- name: short kebab-case identifier (e.g. 'user-preference-tabs')
-- type: one of 'user' (user preference), 'feedback' (guidance), \
+- name: short kebab-case identifier (e.g. 'project-architecture-pattern')
+- type: one of 'user' (role/goals), 'feedback' (guidance), \
 'project' (project fact), 'reference' (external pointer)
 - description: one-line summary for index lookup
 - body: full detail in markdown
-If nothing new or already covered by existing memories, return [].
 
 Existing memories:
 {existing}
@@ -356,8 +384,10 @@ CONSOLIDATE_MEMORIES_TEMPLATE = """\
 Consolidate the following memory files. Rules:
 1. Merge duplicates into one
 2. Remove outdated/contradicted memories
-3. Keep the total under {threshold} memories
-4. Preserve important user preferences above all
+3. Remove transient or low-value memories (one-off questions, minor clarifications)
+4. Keep the total under {threshold} memories
+5. Preserve high-value memories above all: project goals, architecture decisions, \
+repeated user preferences, explicit "remember" requests
 Return a JSON array. Each item: {{name, type, description, body}}.
 
 {catalog}"""

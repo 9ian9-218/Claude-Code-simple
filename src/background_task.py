@@ -13,9 +13,14 @@ from tool import execute_tool_call
 _bg_counter = 0
 _bg_lock = threading.Lock()
 
+# Running background tasks registry (for kill_bg_task)
+_running_tasks: dict[str, dict] = {}
+_running_tasks_lock = threading.Lock()
+
 # Stall watchdog (aligned with LocalShellTask.tsx L24-26)
 STALL_CHECK_INTERVAL_S = 5
-STALL_THRESHOLD_S = 45
+STALL_THRESHOLD_S = 15        # seconds of silence before suspecting a stall
+STALL_MAX_WATCHDOG_S = 300    # total watchdog hard limit — notify even without prompt pattern
 STALL_TAIL_BYTES = 1024
 
 # Last-line patterns suggesting a command is blocked on keyboard input (L28-38)
@@ -81,10 +86,21 @@ def should_run_background(tool_name: str, tool_input: dict) -> bool:
 
 def _enqueue_stall_notification(
     bg_id: str, command: str, tool_use_id: str | None, tail: str,
-    *, recipient: str | None = None,
+    *, recipient: str | None = None, is_prompt: bool = True,
 ) -> None:
     """One-shot stall notification (no <status> — CC treats unknown status as terminal)."""
-    summary = f'Background command "{command}" appears to be waiting for interactive input'
+    if is_prompt:
+        summary = f'Background command "{command}" appears to be waiting for interactive input'
+        action = (
+            "The command is likely blocked on an interactive prompt. Kill this task and re-run "
+            "with piped input (e.g., `echo y | command`) or a non-interactive flag if one exists."
+        )
+    else:
+        summary = f'Background command "{command}" has no output for {STALL_THRESHOLD_S}s'
+        action = (
+            f"The command has been running for over {STALL_MAX_WATCHDOG_S}s without output. "
+            "Kill this task if it is stuck, or wait for it to finish if it is just slow."
+        )
     tool_use_line = f"  <tool_use_id>{tool_use_id}</tool_use_id>\n" if tool_use_id else ""
     message = (
         f"<task_notification>\n"
@@ -92,8 +108,7 @@ def _enqueue_stall_notification(
         f"{tool_use_line}"
         f"  <summary>{summary}</summary>\n"
         f"\nLast output:\n{tail.rstrip()}\n\n"
-        f"The command is likely blocked on an interactive prompt. Kill this task and re-run "
-        f"with piped input (e.g., `echo y | command`) or a non-interactive flag if one exists."
+        f"{action}"
     )
     enqueue_pending_notification(message, priority="next", recipient=recipient)
 
@@ -111,6 +126,11 @@ def _run_bash_with_exit_code(
         )
     except (FileNotFoundError, OSError) as e:
         return f"Error: {e}", 1
+
+    # Register in running tasks
+    if bg_id:
+        with _running_tasks_lock:
+            _running_tasks[bg_id] = {"process": proc, "command": command, "tool_name": "run_bash"}
 
     output_chunks: list[str] = []
     lock = threading.Lock()
@@ -134,6 +154,7 @@ def _run_bash_with_exit_code(
                 proc.stdout.close()
 
     def watchdog():
+        start_time = time.time()
         while not watchdog_stopped.wait(STALL_CHECK_INTERVAL_S):
             if proc.poll() is not None:
                 break
@@ -146,17 +167,36 @@ def _run_bash_with_exit_code(
                 if time.time() - last_growth[0] < STALL_THRESHOLD_S:
                     continue
                 tail = "".join(output_chunks)[-STALL_TAIL_BYTES:]
-                if not _looks_like_prompt(tail):
-                    # Not a prompt — reset so the next check is 45s out.
+                is_prompt = _looks_like_prompt(tail)
+                elapsed = time.time() - start_time
+
+                if is_prompt:
+                    if stall_notified[0]:
+                        break
+                    stall_notified[0] = True
+                    _enqueue_stall_notification(
+                        bg_id, command, tool_use_id, tail,
+                        recipient=recipient, is_prompt=True,
+                    )
+                    print(f"  \033[33m[stall watchdog] {bg_id}: "
+                          f"interactive prompt detected\033[0m")
+                    break
+                elif elapsed >= STALL_MAX_WATCHDOG_S:
+                    if stall_notified[0]:
+                        break
+                    stall_notified[0] = True
+                    _enqueue_stall_notification(
+                        bg_id, command, tool_use_id, tail,
+                        recipient=recipient, is_prompt=False,
+                    )
+                    print(f"  \033[33m[stall watchdog] {bg_id}: "
+                          f"no output for {STALL_THRESHOLD_S}s "
+                          f"(total > {STALL_MAX_WATCHDOG_S}s)\033[0m")
+                    break
+                else:
+                    # Not a prompt, within total budget — keep watching
                     last_growth[0] = time.time()
                     continue
-                if stall_notified[0]:
-                    break
-                stall_notified[0] = True
-                _enqueue_stall_notification(bg_id, command, tool_use_id, tail, recipient=recipient)
-                print(f"  \033[33m[stall watchdog] {bg_id}: "
-                      f"interactive prompt detected\033[0m")
-            break
 
     reader_t = threading.Thread(target=reader, daemon=True)
     watchdog_t = threading.Thread(target=watchdog, daemon=True)
@@ -166,6 +206,10 @@ def _run_bash_with_exit_code(
     exit_code = proc.wait()
     watchdog_stopped.set()
     watchdog_t.join(timeout=1)
+
+    if bg_id:
+        with _running_tasks_lock:
+            _running_tasks.pop(bg_id, None)
 
     out = "".join(output_chunks).strip()
     output = out[:50000] if out else "(no output)"
@@ -210,6 +254,30 @@ def _enqueue_completion_notification(
     enqueue_pending_notification(message, priority="later", recipient=recipient)
 
 
+def kill_bg_task(bg_id: str) -> str:
+    """Kill a running background task by ID. Returns a result message."""
+    with _running_tasks_lock:
+        info = _running_tasks.get(bg_id)
+        if info is None:
+            return f"Error: no running task '{bg_id}'"
+        proc = info.get("process")
+        if proc is None:
+            return f"Error: task '{bg_id}' is not a bash process and cannot be killed"
+        command = info.get("command", "")
+        del _running_tasks[bg_id]
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+    except Exception as e:
+        return f"Error killing task '{bg_id}': {e}"
+    print(f"  \033[33m[kill] {bg_id}: {command[:60]}\033[0m")
+    return f"Killed background task '{bg_id}' ({command[:60]})"
+
+
 def start_background_task(tool_call, args: dict) -> str:
     """Run tool in a daemon thread. Returns background task ID."""
     global _bg_counter
@@ -221,6 +289,10 @@ def start_background_task(tool_call, args: dict) -> str:
     command = args.get("command", "")
     block = SimpleNamespace(name=tool_name, input=args)
 
+    # Register without process initially; _run_bash_with_exit_code will fill it in
+    with _running_tasks_lock:
+        _running_tasks[bg_id] = {"process": None, "command": command, "tool_name": tool_name}
+
     from teammates.context import get_agent_context
     ctx = get_agent_context()
     recipient = ctx.agent_name if ctx.is_teammate else None
@@ -228,13 +300,17 @@ def start_background_task(tool_call, args: dict) -> str:
     def worker():
         from mcp_integration.names import underlying_tool_name
 
-        if underlying_tool_name(tool_name) == "run_bash":
-            output, exit_code = _run_bash_with_exit_code(
-                command, bg_id=bg_id, tool_use_id=tool_call.id, recipient=recipient,
-            )
-        else:
-            output = execute_tool_call(tool_call, args=args)
-            exit_code = 0 if not str(output).startswith("Error") else 1
+        try:
+            if underlying_tool_name(tool_name) == "run_bash":
+                output, exit_code = _run_bash_with_exit_code(
+                    command, bg_id=bg_id, tool_use_id=tool_call.id, recipient=recipient,
+                )
+            else:
+                output = execute_tool_call(tool_call, args=args)
+                exit_code = 0 if not str(output).startswith("Error") else 1
+        finally:
+            with _running_tasks_lock:
+                _running_tasks.pop(bg_id, None)
 
         trigger_hooks("PostToolUse", block, output)
         summary = _build_completion_summary(tool_name, command, exit_code)
