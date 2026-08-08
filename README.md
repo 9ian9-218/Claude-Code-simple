@@ -1,6 +1,6 @@
 # Claude-Code-simple
 
-类 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 架构的 Python Agent 运行时。参考 [learn-claude-code](https://github.com/shareAI-lab/learn-claude-code) 课程（s01–s20）渐进实现，覆盖 Agent 主循环、工具调用、上下文管理、多 Agent 协作等完整能力栈。
+类 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 架构的 Python Agent 运行时。参考 [learn-claude-code](https://github.com/shareAI-lab/learn-claude-code) 课程渐进实现，覆盖 Agent 主循环、工具调用、上下文管理、多 Agent 协作等完整能力栈。
 
 ## 特性概览
 
@@ -18,12 +18,11 @@
 | Memory | s09 | ✅ | Markdown 长期记忆，Stop Hook 异步提取 |
 | Subagent | s04 | ✅ | 进程内子 Agent，独立工具权限 |
 | Agent Teams | s15 | ✅ | Lead + Teammate，JSONL 邮箱 + 权限同步 |
-| Team Protocols | s16 | 🚧 | 结构化 request_id 协议（plan 审批等） |
-| Autonomous Agents | s17 | 🚧 | Idle 轮询 + 任务看板自动 claim |
+| Team Protocols | s16 | ✅ | 结构化 request_id 协议（plan 审批等） |
+| Autonomous Agents | s17 | ✅ | Idle 轮询 + 任务看板自动 claim |
 | Worktree Isolation | s18 | ✅ | Git Worktree per-task 隔离 |
 | Cron Scheduler | s14 | 🚧 | 持久化定时任务 + 队列处理器 |
 | MCP Tools | s19 | 🚧 | 外部 MCP Server 发现与命名空间归一化 |
-| Comprehensive Agent | s20 | 🚧 | 全模块统一编排 |
 
 ## 架构
 
